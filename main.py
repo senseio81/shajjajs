@@ -23,7 +23,7 @@ async def init_db():
         CREATE TABLE IF NOT EXISTS users (
             id BIGINT PRIMARY KEY,
             username TEXT,
-            balance INTEGER DEFAULT 1000,
+            balance INTEGER DEFAULT 0,
             total_bet INTEGER DEFAULT 0,
             registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
@@ -32,13 +32,13 @@ async def init_db():
 
 def get_rank(total_bet):
     if total_bet < 50:
-        return "👾 Новичок", total_bet, 50
+        return "👾 Новичок", 50
     elif total_bet < 500:
-        return "🤖 Олд", total_bet, 500
+        return "🤖 Олд", 500
     elif total_bet < 5000:
-        return "👑 Профи", total_bet, 5000
+        return "👑 Профи", 5000
     else:
-        return "💎 Герцог", total_bet, 50000
+        return "💎 Герцог", 50000
 
 def get_main_keyboard():
     return ReplyKeyboardMarkup(
@@ -84,18 +84,18 @@ async def profile_command(message: Message):
         await message.answer("Ошибка. Напишите /start")
         return
     
-    rank_name, total_bet, next_threshold = get_rank(user["total_bet"])
-    remaining = max(0, next_threshold - total_bet)
+    rank_name, next_threshold = get_rank(user["total_bet"])
+    remaining = max(0, next_threshold - user["total_bet"])
     reg_date = user["registered_at"].strftime("%d.%m.%Y")
     
     await message.answer("🎲")
     
     profile_text = (
-        f"🔐 **Ваш профиль**\n"
+        f"**🔐 Ваш профиль**\n"
         f"└ Текущий баланс: {user['balance']}$\n\n"
         f"> Зарегистрирован: {reg_date}\n\n"
-        f"Ваш ранг: {rank_name}\n"
-        f" ├ Оборот: {total_bet}$\n"
+        f"**Ваш ранг: {rank_name}**\n"
+        f" ├ Оборот: {user['total_bet']}$\n"
         f" └ Осталось: {remaining}$ из {next_threshold}$"
     )
     
