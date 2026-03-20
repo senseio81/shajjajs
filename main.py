@@ -1,21 +1,29 @@
 import asyncio
 import logging
-from datetime import datetime
 import os
+import aiohttp
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from aiogram.enums import ParseMode
+from aiogram.fsm import State, StatesGroup
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.storage.memory import MemoryStorage
 import asyncpg
 
 TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
+CRYPTO_TOKEN = os.getenv("CRYPTO_TOKEN")
 
 logging.basicConfig(level=logging.INFO)
 
 bot = Bot(token=TOKEN)
-dp = Dispatcher()
+storage = MemoryStorage()
+dp = Dispatcher(storage=storage)
+
+class DepositStates(StatesGroup):
+    waiting_for_amount = State()
 
 async def init_db():
     conn = await asyncpg.connect(DATABASE_URL)
@@ -67,6 +75,28 @@ def get_referral_inline():
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_profile")]
+        ]
+    )
+
+def get_deposit_methods_inline():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🎉 CryptoBot", callback_data="crypto_bot")],
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_profile")]
+        ]
+    )
+
+def get_cancel_inline():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔐 Отменить", callback_data="cancel_deposit")]
+        ]
+    )
+
+def get_play_inline():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🎲 Сделать ставку", callback_data="play_stub")]
         ]
     )
 
@@ -129,9 +159,126 @@ async def profile_command(message: Message):
         reply_markup=get_profile_inline()
     )
 
+@dp.callback_query(F.data == "deposit")
+async def deposit_methods(callback: types.CallbackQuery):
+    deposit_text = (
+        f"<b>💳 Пополнение депозита</b>\n"
+        f"└ Выберите удобный для вас способ оплаты:"
+    )
+    
+    await callback.message.edit_caption(
+        caption=deposit_text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_deposit_methods_inline()
+    )
+    await callback.answer()
+
+@dp.callback_query(F.data == "crypto_bot")
+async def crypto_bot_deposit(callback: types.CallbackQuery, state: FSMContext):
+    amount_text = (
+        f"<b>💳 Пополнение депозита</b>\n"
+        f"└ Введите сумму для оплаты:"
+    )
+    
+    await callback.message.edit_caption(
+        caption=amount_text,
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_cancel_inline()
+    )
+    await state.set_state(DepositStates.waiting_for_amount)
+    await callback.answer()
+
+@dp.message(DepositStates.waiting_for_amount)
+async def process_deposit_amount(message: Message, state: FSMContext):
+    try:
+        amount = float(message.text.replace(",", "."))
+        if amount <= 0:
+            await message.answer("❌ Сумма должна быть больше 0")
+            return
+    except:
+        await message.answer("❌ Введите число")
+        return
+    
+    async with aiohttp.ClientSession() as session:
+        headers = {
+            "Crypto-Pay-API-Token": CRYPTO_TOKEN,
+            "Content-Type": "application/json"
+        }
+        data = {
+            "asset": "USDT",
+            "amount": str(amount),
+            "description": f"Пополнение баланса для {message.from_user.id}"
+        }
+        
+        async with session.post("https://testnet-pay.crypt.bot/api/createInvoice", json=data, headers=headers) as resp:
+            result = await resp.json()
+            
+            if result.get("ok"):
+                invoice = result["result"]
+                await message.answer(
+                    f"💳 Оплатите счет:\n{invoice['pay_url']}\n\n"
+                    f"Сумма: {amount} USDT\n"
+                    f"После оплаты баланс пополнится автоматически"
+                )
+                
+                await state.update_data(amount=amount, invoice_id=invoice["invoice_id"])
+                await state.set_state(None)
+                
+                asyncio.create_task(check_payment(invoice["invoice_id"], message.from_user.id, amount))
+            else:
+                await message.answer("❌ Ошибка создания счета. Попробуйте позже.")
+                await state.clear()
+
+async def check_payment(invoice_id, user_id, amount):
+    await asyncio.sleep(3)
+    
+    for _ in range(30):
+        await asyncio.sleep(2)
+        
+        async with aiohttp.ClientSession() as session:
+            headers = {
+                "Crypto-Pay-API-Token": CRYPTO_TOKEN
+            }
+            params = {"invoice_ids": invoice_id}
+            
+            async with session.get("https://testnet-pay.crypt.bot/api/getInvoices", params=params, headers=headers) as resp:
+                result = await resp.json()
+                
+                if result.get("ok") and result["result"]["items"]:
+                    invoice = result["result"]["items"][0]
+                    if invoice["status"] == "paid":
+                        conn = await asyncpg.connect(DATABASE_URL)
+                        await conn.execute("UPDATE users SET balance = balance + $1 WHERE id = $2", int(amount), user_id)
+                        await conn.close()
+                        
+                        await bot.send_message(
+                            user_id,
+                            "🎉"
+                        )
+                        await bot.send_message(
+                            user_id,
+                            f"<b>💎 Успешное пополнение</b>\n└ На ваш баланс зачислено {amount} USDT",
+                            parse_mode=ParseMode.HTML,
+                            reply_markup=get_play_inline()
+                        )
+                        return
+                    elif invoice["status"] == "expired":
+                        await bot.send_message(user_id, "❌ Счет просрочен. Попробуйте снова.")
+                        return
+
 @dp.message(F.text == "🎲 Играть")
 async def play_dummy(message: Message):
     await message.answer("🎲 Игра в разработке 🛠")
+
+@dp.callback_query(F.data == "play_stub")
+async def play_stub(callback: types.CallbackQuery):
+    await callback.answer("🎲 Игра в разработке", show_alert=True)
+
+@dp.callback_query(F.data == "cancel_deposit")
+async def cancel_deposit(callback: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    await profile_command(callback.message)
+    await callback.answer()
 
 @dp.callback_query(F.data == "referral")
 async def referral_program(callback: types.CallbackQuery):
