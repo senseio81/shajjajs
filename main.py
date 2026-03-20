@@ -25,19 +25,17 @@ logging.basicConfig(level=logging.INFO)
 async def start(update: Update, context: ext.ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "👋 Привет! Я помогу получить file_id для премиум эмодзи.\n\n"
-        "📌 **Как получить file_id:**\n"
+        "Как получить file_id:\n"
         "1. Найди премиум эмодзи в любом чате\n"
         "2. Перешли его мне (или просто отправь стикер)\n"
         "3. Я покажу его file_id\n\n"
-        "👉 **Или используй готовый тестовый стикер:**",
-        parse_mode='Markdown'
+        "👉 Или используй готовый тестовый стикер:"
     )
     
     # Отправляем тестовый стикер (рабочий file_id)
     try:
-        # Это рабочий тестовый стикер от Telegram
         await update.message.reply_sticker(
-            sticker="CAACAgIAAxkBAAIBJGQkXR9Pfb5y-J_123456"  # Заменится когда получите реальный
+            sticker="CAACAgIAAxkBAAIBJGQkXR9Pfb5y-J_123456"
         )
     except:
         await update.message.reply_text("🥳 Отправь мне любой стикер!")
@@ -51,12 +49,11 @@ async def handle_sticker(update: Update, context: ext.ContextTypes.DEFAULT_TYPE)
         
         # Отправляем информацию о стикере
         await update.message.reply_text(
-            f"✅ **File ID получен!**\n\n"
-            f"📎 **file_id:**\n`{file_id}`\n\n"
-            f"😊 **Emoji:** {emoji}\n"
-            f"📦 **Размер:** {sticker.width}x{sticker.height}\n\n"
-            f"📋 **Скопируй file_id и вставь в код!**",
-            parse_mode='Markdown'
+            f"✅ File ID получен!\n\n"
+            f"📎 file_id:\n{file_id}\n\n"
+            f"😊 Emoji: {emoji}\n"
+            f"📦 Размер: {sticker.width}x{sticker.height}\n\n"
+            f"📋 Скопируй file_id и вставь в код!"
         )
         
         # Отправляем тот же стикер обратно (для проверки)
@@ -72,7 +69,7 @@ async def handle_text(update: Update, context: ext.ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     
     # Проверяем, может это file_id вставили
-    if len(text) > 30 and "_" in text:  # Похоже на file_id
+    if len(text) > 30 and "_" in text:
         try:
             await update.message.reply_sticker(sticker=text)
             await update.message.reply_text("✅ Стикер отправлен! Работает!")
@@ -80,9 +77,8 @@ async def handle_text(update: Update, context: ext.ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Этот file_id не работает. Попробуй другой.")
     else:
         await update.message.reply_text(
-            "Отправь мне **стикер** или **премиум эмодзи** (перешли его), "
-            "и я покажу его file_id!",
-            parse_mode='Markdown'
+            "Отправь мне стикер или премиум эмодзи (перешли его), "
+            "и я покажу его file_id!"
         )
 
 def main():
@@ -93,7 +89,6 @@ def main():
     print("🚀 Запуск бота...")
     app = Application.builder().token(TOKEN).build()
     
-    # Добавляем обработчики
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.Sticker.ALL, handle_sticker))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
