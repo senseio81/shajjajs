@@ -257,7 +257,7 @@ async def process_withdraw_amount(message: Message, state: FSMContext):
                 await message.answer(
                     f"🎉 Чек создан!\n\n"
                     f"Сумма: {amount} USDT\n"
-                    f"Ссылка: {check['check_url']}\n\n"
+                    f"Ссылка: {check['bot_check_url']}\n\n"
                     f"Перейдите по ссылке и активируйте чек для получения средств"
                 )
                 await state.clear()
