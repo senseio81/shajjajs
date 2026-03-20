@@ -311,7 +311,38 @@ async def play_stub(callback: types.CallbackQuery):
 @dp.callback_query(F.data == "cancel_deposit")
 async def cancel_deposit(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
-    await profile_command(callback.message)
+    
+    conn = await asyncpg.connect(DATABASE_URL)
+    user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", callback.from_user.id)
+    await conn.close()
+    
+    if not user:
+        await callback.message.answer("Ошибка. Напишите /start")
+        await callback.answer()
+        return
+    
+    rank_name, next_threshold = get_rank(user["total_bet"])
+    remaining = max(0, next_threshold - user["total_bet"])
+    reg_date = user["registered_at"].strftime("%d.%m.%Y")
+    
+    profile_text = (
+        f"<b>🔐 Ваш профиль</b>\n"
+        f"└ Текущий баланс: {user['balance']}$\n\n"
+        f"<blockquote>Зарегистрирован: {reg_date}</blockquote>\n"
+        f"<b>Ваш ранг: {rank_name}</b>\n"
+        f" ├ Оборот: {user['total_bet']}$\n"
+        f" └ Осталось: {remaining}$ из {next_threshold}$"
+    )
+    
+    photo = FSInputFile("IMG_0760.jpeg")
+    await callback.message.edit_media(
+        types.InputMediaPhoto(
+            media=photo,
+            caption=profile_text,
+            parse_mode=ParseMode.HTML
+        ),
+        reply_markup=get_profile_inline()
+    )
     await callback.answer()
 
 @dp.callback_query(F.data == "referral")
