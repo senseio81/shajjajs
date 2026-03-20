@@ -1,101 +1,121 @@
-import subprocess
-import sys
+import asyncio
 import logging
+from datetime import datetime
 import os
 
-# Автоустановка библиотеки
-try:
-    from telegram.ext import Application, CommandHandler, MessageHandler, filters
-    from telegram import Update
-    import telegram.ext as ext
-    print("✅ Библиотека загружена")
-except ImportError:
-    print("📦 Устанавливаю библиотеку...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "python-telegram-bot==20.7"])
-    from telegram.ext import Application, CommandHandler, MessageHandler, filters
-    from telegram import Update
-    import telegram.ext as ext
+from aiogram import Bot, Dispatcher, types, F
+from aiogram.filters import Command
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.enums import ParseMode
+import asyncpg
 
-# Токен из Secrets
-TOKEN = os.environ.get('TOKEN')
+TOKEN = os.getenv("BOT_TOKEN")
+DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Включаем логирование
 logging.basicConfig(level=logging.INFO)
 
-async def start(update: Update, context: ext.ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "👋 Привет! Я помогу получить file_id для премиум эмодзи.\n\n"
-        "Как получить file_id:\n"
-        "1. Найди премиум эмодзи в любом чате\n"
-        "2. Перешли его мне (или просто отправь стикер)\n"
-        "3. Я покажу его file_id\n\n"
-        "👉 Или используй готовый тестовый стикер:"
+bot = Bot(token=TOKEN)
+dp = Dispatcher()
+
+async def init_db():
+    conn = await asyncpg.connect(DATABASE_URL)
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS users (
+            id BIGINT PRIMARY KEY,
+            username TEXT,
+            balance INTEGER DEFAULT 1000,
+            total_bet INTEGER DEFAULT 0,
+            registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
+    await conn.close()
+
+def get_rank(total_bet):
+    if total_bet < 50:
+        return "👾 Новичок", total_bet, 50
+    elif total_bet < 500:
+        return "🤖 Олд", total_bet, 500
+    elif total_bet < 5000:
+        return "👑 Профи", total_bet, 5000
+    else:
+        return "💎 Герцог", total_bet, 50000
+
+def get_main_keyboard():
+    return ReplyKeyboardMarkup(
+        keyboard=[
+            [KeyboardButton(text="🎲 Играть"), KeyboardButton(text="💳 Профиль")]
+        ],
+        resize_keyboard=True
     )
+
+def get_profile_inline():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="💳 Пополнить", callback_data="deposit"),
+                InlineKeyboardButton(text="🎉 Вывести", callback_data="withdraw")
+            ],
+            [InlineKeyboardButton(text="🧩 Реферальная программа", callback_data="referral")]
+        ]
+    )
+
+@dp.message(Command("start"))
+async def start_command(message: Message):
+    conn = await asyncpg.connect(DATABASE_URL)
+    await conn.execute("""
+        INSERT INTO users (id, username) VALUES ($1, $2)
+        ON CONFLICT (id) DO NOTHING
+    """, message.from_user.id, message.from_user.username)
+    await conn.close()
     
-    # Отправляем тестовый стикер (рабочий file_id)
-    try:
-        await update.message.reply_sticker(
-            sticker="CAACAgIAAxkBAAIBJGQkXR9Pfb5y-J_123456"
-        )
-    except:
-        await update.message.reply_text("🥳 Отправь мне любой стикер!")
+    await message.answer(
+        "**🎉 Добро пожаловать в Hot Dice 🎲**\n\nПоддержка: @MNGhotdice",
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=get_main_keyboard()
+    )
 
-async def handle_sticker(update: Update, context: ext.ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает полученные стикеры и показывает их file_id"""
-    if update.message.sticker:
-        sticker = update.message.sticker
-        file_id = sticker.file_id
-        emoji = sticker.emoji if sticker.emoji else "без emoji"
-        
-        # Отправляем информацию о стикере
-        await update.message.reply_text(
-            f"✅ File ID получен!\n\n"
-            f"📎 file_id:\n{file_id}\n\n"
-            f"😊 Emoji: {emoji}\n"
-            f"📦 Размер: {sticker.width}x{sticker.height}\n\n"
-            f"📋 Скопируй file_id и вставь в код!"
-        )
-        
-        # Отправляем тот же стикер обратно (для проверки)
-        await update.message.reply_text("🔁 Отправляю его обратно:")
-        await update.message.reply_sticker(sticker=file_id)
-        
-        print(f"✅ Получен file_id: {file_id}")
-    else:
-        await update.message.reply_text("Это не стикер! Отправь стикер.")
-
-async def handle_text(update: Update, context: ext.ContextTypes.DEFAULT_TYPE):
-    """Обрабатывает текстовые сообщения"""
-    text = update.message.text
+@dp.message(F.text == "💳 Профиль")
+async def profile_command(message: Message):
+    conn = await asyncpg.connect(DATABASE_URL)
+    user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", message.from_user.id)
+    await conn.close()
     
-    # Проверяем, может это file_id вставили
-    if len(text) > 30 and "_" in text:
-        try:
-            await update.message.reply_sticker(sticker=text)
-            await update.message.reply_text("✅ Стикер отправлен! Работает!")
-        except:
-            await update.message.reply_text("❌ Этот file_id не работает. Попробуй другой.")
-    else:
-        await update.message.reply_text(
-            "Отправь мне стикер или премиум эмодзи (перешли его), "
-            "и я покажу его file_id!"
-        )
-
-def main():
-    if not TOKEN:
-        print("❌ ОШИБКА: Токен не найден в Secrets!")
+    if not user:
+        await message.answer("Ошибка. Напишите /start")
         return
     
-    print("🚀 Запуск бота...")
-    app = Application.builder().token(TOKEN).build()
+    rank_name, total_bet, next_threshold = get_rank(user["total_bet"])
+    remaining = max(0, next_threshold - total_bet)
+    reg_date = user["registered_at"].strftime("%d.%m.%Y")
     
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.Sticker.ALL, handle_sticker))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+    await message.answer("🎲")
     
-    print("✅ Бот готов получать стикеры!")
-    print("📱 Отправь боту любой стикер или премиум эмодзи")
-    app.run_polling()
+    profile_text = (
+        f"🔐 **Ваш профиль**\n"
+        f"└ Текущий баланс: {user['balance']}$\n\n"
+        f"> Зарегистрирован: {reg_date}\n\n"
+        f"Ваш ранг: {rank_name}\n"
+        f" ├ Оборот: {total_bet}$\n"
+        f" └ Осталось: {remaining}$ из {next_threshold}$"
+    )
+    
+    await message.answer(
+        profile_text,
+        parse_mode=ParseMode.MARKDOWN,
+        reply_markup=get_profile_inline()
+    )
+
+@dp.message(F.text == "🎲 Играть")
+async def play_dummy(message: Message):
+    await message.answer("🎲 Игра в разработке 🛠")
+
+@dp.callback_query()
+async def handle_callbacks(callback: types.CallbackQuery):
+    await callback.answer("🚧 В разработке", show_alert=True)
+
+async def main():
+    await init_db()
+    await dp.start_polling(bot)
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
