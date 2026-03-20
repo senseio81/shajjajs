@@ -70,8 +70,8 @@ async def start_command(message: Message):
     await conn.close()
     
     await message.answer(
-        "**🎉 Добро пожаловать в Hot Dice 🎲**\n\nПоддержка: @MNGhotdice",
-        parse_mode=ParseMode.MARKDOWN,
+        "<b>🎉 Добро пожаловать в Hot Dice 🎲</b>\n\nПоддержка: @MNGhotdice",
+        parse_mode=ParseMode.HTML,
         reply_markup=get_main_keyboard()
     )
 
@@ -92,17 +92,17 @@ async def profile_command(message: Message):
     await message.answer("🎲")
     
     profile_text = (
-        f"**🔐 Ваш профиль**\n"
+        f"<b>🔐 Ваш профиль</b>\n"
         f"└ Текущий баланс: {user['balance']}$\n\n"
-        f"> Зарегистрирован: {reg_date}\n\n"
-        f"**Ваш ранг: {rank_name}**\n"
+        f"<blockquote>Зарегистрирован: {reg_date}</blockquote>\n"
+        f"<b>Ваш ранг: {rank_name}</b>\n"
         f" ├ Оборот: {user['total_bet']}$\n"
         f" └ Осталось: {remaining}$ из {next_threshold}$"
     )
     
     await message.answer(
         profile_text,
-        parse_mode=ParseMode.MARKDOWN,
+        parse_mode=ParseMode.HTML,
         reply_markup=get_profile_inline()
     )
 
