@@ -242,6 +242,11 @@ async def process_withdraw_amount(message: Message, state: FSMContext):
         async with session.post("https://testnet-pay.crypt.bot/api/createCheck", json=data, headers=headers) as resp:
             result = await resp.json()
             
+            print(f"=== WITHDRAW DEBUG ===")
+            print(f"Status: {resp.status}")
+            print(f"Response: {result}")
+            print(f"=====================")
+            
             if result.get("ok"):
                 check = result["result"]
                 
@@ -257,7 +262,8 @@ async def process_withdraw_amount(message: Message, state: FSMContext):
                 )
                 await state.clear()
             else:
-                await message.answer("❌ Ошибка создания чека. Попробуйте позже.")
+                error_msg = result.get('error', result)
+                await message.answer(f"❌ Ошибка создания чека: {error_msg}\n\nПроверьте токен и попробуйте позже.")
                 await state.clear()
 
 @dp.callback_query(F.data == "crypto_bot")
