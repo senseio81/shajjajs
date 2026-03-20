@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 import aiohttp
-#by HOT CASINO
+
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
@@ -21,6 +21,8 @@ logging.basicConfig(level=logging.INFO)
 bot = Bot(token=TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
+
+user_invoice_messages = {}
 
 class DepositStates(StatesGroup):
     waiting_for_amount = State()
@@ -166,9 +168,13 @@ async def deposit_methods(callback: types.CallbackQuery):
         f"└ Выберите удобный для вас способ оплаты:"
     )
     
-    await callback.message.edit_caption(
-        caption=deposit_text,
-        parse_mode=ParseMode.HTML,
+    photo = FSInputFile("IMG_0757.jpeg")
+    await callback.message.edit_media(
+        types.InputMediaPhoto(
+            media=photo,
+            caption=deposit_text,
+            parse_mode=ParseMode.HTML
+        ),
         reply_markup=get_deposit_methods_inline()
     )
     await callback.answer()
@@ -180,9 +186,13 @@ async def crypto_bot_deposit(callback: types.CallbackQuery, state: FSMContext):
         f"└ Введите сумму для оплаты:"
     )
     
-    await callback.message.edit_caption(
-        caption=amount_text,
-        parse_mode=ParseMode.HTML,
+    photo = FSInputFile("IMG_0757.jpeg")
+    await callback.message.edit_media(
+        types.InputMediaPhoto(
+            media=photo,
+            caption=amount_text,
+            parse_mode=ParseMode.HTML
+        ),
         reply_markup=get_cancel_inline()
     )
     await state.set_state(DepositStates.waiting_for_amount)
@@ -215,21 +225,27 @@ async def process_deposit_amount(message: Message, state: FSMContext):
             
             if result.get("ok"):
                 invoice = result["result"]
-                await message.answer(
+                msg = await message.answer(
                     f"💳 Оплатите счет:\n{invoice['pay_url']}\n\n"
                     f"Сумма: {amount} USDT\n"
                     f"После оплаты баланс пополнится автоматически"
                 )
                 
-                await state.update_data(amount=amount, invoice_id=invoice["invoice_id"])
+                user_invoice_messages[invoice["invoice_id"]] = {
+                    "user_id": message.from_user.id,
+                    "message_id": msg.message_id,
+                    "chat_id": message.chat.id,
+                    "amount": amount
+                }
+                
                 await state.clear()
                 
-                asyncio.create_task(check_payment(invoice["invoice_id"], message.from_user.id, amount))
+                asyncio.create_task(check_payment(invoice["invoice_id"]))
             else:
                 await message.answer("❌ Ошибка создания счета. Попробуйте позже.")
                 await state.clear()
 
-async def check_payment(invoice_id, user_id, amount):
+async def check_payment(invoice_id):
     await asyncio.sleep(3)
     
     for _ in range(30):
@@ -247,23 +263,41 @@ async def check_payment(invoice_id, user_id, amount):
                 if result.get("ok") and result["result"]["items"]:
                     invoice = result["result"]["items"][0]
                     if invoice["status"] == "paid":
-                        conn = await asyncpg.connect(DATABASE_URL)
-                        await conn.execute("UPDATE users SET balance = balance + $1 WHERE id = $2", int(amount), user_id)
-                        await conn.close()
-                        
-                        await bot.send_message(
-                            user_id,
-                            "🎉"
-                        )
-                        await bot.send_message(
-                            user_id,
-                            f"<b>💎 Успешное пополнение</b>\n└ На ваш баланс зачислено {amount} USDT",
-                            parse_mode=ParseMode.HTML,
-                            reply_markup=get_play_inline()
-                        )
+                        invoice_data = user_invoice_messages.get(invoice_id)
+                        if invoice_data:
+                            user_id = invoice_data["user_id"]
+                            amount = invoice_data["amount"]
+                            chat_id = invoice_data["chat_id"]
+                            message_id = invoice_data["message_id"]
+                            
+                            try:
+                                await bot.delete_message(chat_id, message_id)
+                            except:
+                                pass
+                            
+                            conn = await asyncpg.connect(DATABASE_URL)
+                            await conn.execute("UPDATE users SET balance = balance + $1 WHERE id = $2", int(amount), user_id)
+                            await conn.close()
+                            
+                            await bot.send_message(
+                                user_id,
+                                "🎉"
+                            )
+                            
+                            await bot.send_message(
+                                user_id,
+                                f"<b>💎 Успешное пополнение</b>\n└ На ваш баланс зачислено {amount} USDT",
+                                parse_mode=ParseMode.HTML,
+                                reply_markup=get_play_inline()
+                            )
+                            
+                            del user_invoice_messages[invoice_id]
                         return
                     elif invoice["status"] == "expired":
-                        await bot.send_message(user_id, "❌ Счет просрочен. Попробуйте снова.")
+                        invoice_data = user_invoice_messages.get(invoice_id)
+                        if invoice_data:
+                            await bot.send_message(invoice_data["user_id"], "❌ Счет просрочен. Попробуйте снова.")
+                            del user_invoice_messages[invoice_id]
                         return
 
 @dp.message(F.text == "🎲 Играть")
