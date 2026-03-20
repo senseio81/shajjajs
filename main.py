@@ -12,6 +12,7 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.utils.rate_limit import rate_limit
 import asyncpg
 
 TOKEN = os.getenv("BOT_TOKEN")
@@ -32,6 +33,9 @@ class DepositStates(StatesGroup):
 
 class WithdrawStates(StatesGroup):
     waiting_for_amount = State()
+
+class BroadcastStates(StatesGroup):
+    waiting_for_message = State()
 
 async def init_db():
     conn = await asyncpg.connect(DATABASE_URL)
@@ -188,6 +192,7 @@ async def start_command(message: Message):
         reply_markup=get_main_keyboard()
     )
 
+@rate_limit(limit=10, key='profile')
 @dp.message(F.text == "💳 Профиль")
 async def profile_command(message: Message):
     await message.reply("🎲")
@@ -223,6 +228,7 @@ async def profile_command(message: Message):
         reply_markup=get_profile_inline()
     )
 
+@rate_limit(limit=10, key='deposit_callback')
 @dp.callback_query(F.data == "deposit")
 async def deposit_methods(callback: types.CallbackQuery):
     await log_action(callback.from_user.id, "deposit", "Открыто меню пополнения")
@@ -243,6 +249,7 @@ async def deposit_methods(callback: types.CallbackQuery):
     )
     await callback.answer()
 
+@rate_limit(limit=10, key='withdraw_callback')
 @dp.callback_query(F.data == "withdraw")
 async def withdraw_start(callback: types.CallbackQuery, state: FSMContext):
     await log_action(callback.from_user.id, "withdraw", "Начало вывода средств")
@@ -312,6 +319,7 @@ async def process_withdraw_amount(message: Message, state: FSMContext):
     
     await state.clear()
 
+@rate_limit(limit=5, key='admin_callback')
 @dp.callback_query(F.data.startswith("admin_logs_"))
 async def admin_logs(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
@@ -338,9 +346,6 @@ async def admin_logs(callback: types.CallbackQuery):
     if not logs:
         log_text = "Нет логов для этого пользователя"
     
-    log_file = StringIO(log_text)
-    log_file.seek(0)
-    
     await callback.message.answer_document(
         types.BufferedInputFile(
             log_text.encode('utf-8'),
@@ -350,6 +355,7 @@ async def admin_logs(callback: types.CallbackQuery):
     )
     await callback.answer()
 
+@rate_limit(limit=5, key='admin_callback')
 @dp.callback_query(F.data.startswith("admin_approve_"))
 async def admin_approve(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
@@ -409,6 +415,7 @@ async def admin_approve(callback: types.CallbackQuery):
                 await callback.message.answer(f"❌ Ошибка создания чека: {result}")
                 await callback.answer("Ошибка")
 
+@rate_limit(limit=5, key='admin_callback')
 @dp.callback_query(F.data.startswith("admin_reject_"))
 async def admin_reject(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
@@ -448,6 +455,7 @@ async def admin_reject(callback: types.CallbackQuery):
     )
     await callback.answer("Заявка отклонена")
 
+@rate_limit(limit=10, key='deposit_callback')
 @dp.callback_query(F.data == "crypto_bot")
 async def crypto_bot_deposit(callback: types.CallbackQuery, state: FSMContext):
     await log_action(callback.from_user.id, "deposit_crypto", "Выбран способ CryptoBot")
@@ -575,15 +583,18 @@ async def check_payment(invoice_id):
                             del user_invoice_messages[invoice_id]
                         return
 
+@rate_limit(limit=10, key='play')
 @dp.message(F.text == "🎲 Играть")
 async def play_dummy(message: Message):
     await log_action(message.from_user.id, "play", "Кнопка игры (заглушка)")
     await message.answer("🎲 Игра в разработке 🛠")
 
+@rate_limit(limit=5, key='callback')
 @dp.callback_query(F.data == "play_stub")
 async def play_stub(callback: types.CallbackQuery):
     await callback.answer("🎲 Игра в разработке", show_alert=True)
 
+@rate_limit(limit=5, key='callback')
 @dp.callback_query(F.data == "cancel_deposit")
 async def cancel_deposit(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
@@ -622,6 +633,7 @@ async def cancel_deposit(callback: types.CallbackQuery, state: FSMContext):
     )
     await callback.answer()
 
+@rate_limit(limit=5, key='callback')
 @dp.callback_query(F.data == "cancel_withdraw")
 async def cancel_withdraw(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
@@ -660,6 +672,7 @@ async def cancel_withdraw(callback: types.CallbackQuery, state: FSMContext):
     )
     await callback.answer()
 
+@rate_limit(limit=10, key='referral_callback')
 @dp.callback_query(F.data == "referral")
 async def referral_program(callback: types.CallbackQuery):
     await log_action(callback.from_user.id, "referral", "Просмотр реферальной программы")
@@ -703,6 +716,7 @@ async def referral_program(callback: types.CallbackQuery):
     )
     await callback.answer()
 
+@rate_limit(limit=5, key='callback')
 @dp.callback_query(F.data == "back_to_profile")
 async def back_to_profile(callback: types.CallbackQuery):
     conn = await asyncpg.connect(DATABASE_URL)
@@ -732,6 +746,48 @@ async def back_to_profile(callback: types.CallbackQuery):
         reply_markup=get_profile_inline()
     )
     await callback.answer()
+
+@dp.message(Command("post"))
+async def broadcast_start(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("🚫 Нет доступа")
+        return
+    
+    await message.answer("📢 Отправьте сообщение для рассылки (текст, фото, видео и т.д.)")
+    await state.set_state(BroadcastStates.waiting_for_message)
+
+@dp.message(BroadcastStates.waiting_for_message)
+async def broadcast_send(message: Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        await state.clear()
+        return
+    
+    conn = await asyncpg.connect(DATABASE_URL)
+    users = await conn.fetch("SELECT id FROM users")
+    await conn.close()
+    
+    success = 0
+    fail = 0
+    
+    await message.answer(f"📢 Начинаю рассылку для {len(users)} пользователей...")
+    
+    for user in users:
+        try:
+            if message.text:
+                await bot.send_message(user["id"], message.text, parse_mode=ParseMode.HTML)
+            elif message.photo:
+                await bot.send_photo(user["id"], message.photo[-1].file_id, caption=message.caption, parse_mode=ParseMode.HTML)
+            elif message.video:
+                await bot.send_video(user["id"], message.video.file_id, caption=message.caption, parse_mode=ParseMode.HTML)
+            elif message.document:
+                await bot.send_document(user["id"], message.document.file_id, caption=message.caption, parse_mode=ParseMode.HTML)
+            success += 1
+        except:
+            fail += 1
+        await asyncio.sleep(0.05)
+    
+    await message.answer(f"✅ Рассылка завершена\n✅ Успешно: {success}\n❌ Ошибок: {fail}")
+    await state.clear()
 
 @dp.callback_query()
 async def handle_callbacks(callback: types.CallbackQuery):
