@@ -7,7 +7,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from aiogram.enums import ParseMode
-from aiogram.fsm import State, StatesGroup
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
 import asyncpg
@@ -222,7 +222,7 @@ async def process_deposit_amount(message: Message, state: FSMContext):
                 )
                 
                 await state.update_data(amount=amount, invoice_id=invoice["invoice_id"])
-                await state.set_state(None)
+                await state.clear()
                 
                 asyncio.create_task(check_payment(invoice["invoice_id"], message.from_user.id, amount))
             else:
