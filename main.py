@@ -77,6 +77,8 @@ async def start_command(message: Message):
 
 @dp.message(F.text == "💳 Профиль")
 async def profile_command(message: Message):
+    await message.reply("🎲")
+    
     conn = await asyncpg.connect(DATABASE_URL)
     user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", message.from_user.id)
     await conn.close()
