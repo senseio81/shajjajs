@@ -5,7 +5,7 @@ import os
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
-from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
 from aiogram.enums import ParseMode
 import asyncpg
 
@@ -89,8 +89,6 @@ async def profile_command(message: Message):
     remaining = max(0, next_threshold - user["total_bet"])
     reg_date = user["registered_at"].strftime("%d.%m.%Y")
     
-    await message.answer("🎲")
-    
     profile_text = (
         f"<b>🔐 Ваш профиль</b>\n"
         f"└ Текущий баланс: {user['balance']}$\n\n"
@@ -100,8 +98,10 @@ async def profile_command(message: Message):
         f" └ Осталось: {remaining}$ из {next_threshold}$"
     )
     
-    await message.answer(
-        profile_text,
+    photo = FSInputFile("IMG_0760.jpeg")
+    await message.answer_photo(
+        photo=photo,
+        caption=profile_text,
         parse_mode=ParseMode.HTML,
         reply_markup=get_profile_inline()
     )
