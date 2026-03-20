@@ -27,6 +27,9 @@ user_invoice_messages = {}
 class DepositStates(StatesGroup):
     waiting_for_amount = State()
 
+class WithdrawStates(StatesGroup):
+    waiting_for_amount = State()
+
 async def init_db():
     conn = await asyncpg.connect(DATABASE_URL)
     await conn.execute("DROP TABLE IF EXISTS users")
@@ -92,6 +95,13 @@ def get_cancel_inline():
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🔐 Отменить", callback_data="cancel_deposit")]
+        ]
+    )
+
+def get_cancel_withdraw_inline():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔐 Отменить", callback_data="cancel_withdraw")]
         ]
     )
 
@@ -178,6 +188,77 @@ async def deposit_methods(callback: types.CallbackQuery):
         reply_markup=get_deposit_methods_inline()
     )
     await callback.answer()
+
+@dp.callback_query(F.data == "withdraw")
+async def withdraw_start(callback: types.CallbackQuery, state: FSMContext):
+    withdraw_text = (
+        f"<b>🎉 Вывод средств</b>\n"
+        f"└ Введите сумму для вывода (мин. 1 USDT):"
+    )
+    
+    photo = FSInputFile("IMG_0757.jpeg")
+    await callback.message.edit_media(
+        types.InputMediaPhoto(
+            media=photo,
+            caption=withdraw_text,
+            parse_mode=ParseMode.HTML
+        ),
+        reply_markup=get_cancel_withdraw_inline()
+    )
+    await state.set_state(WithdrawStates.waiting_for_amount)
+    await callback.answer()
+
+@dp.message(WithdrawStates.waiting_for_amount)
+async def process_withdraw_amount(message: Message, state: FSMContext):
+    try:
+        amount = float(message.text.replace(",", "."))
+        if amount < 1:
+            await message.answer("❌ Минимальная сумма вывода: 1 USDT")
+            return
+    except:
+        await message.answer("❌ Введите число")
+        return
+    
+    conn = await asyncpg.connect(DATABASE_URL)
+    user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", message.from_user.id)
+    await conn.close()
+    
+    if not user or user["balance"] < amount:
+        await message.answer("❌ Недостаточно средств")
+        await state.clear()
+        return
+    
+    async with aiohttp.ClientSession() as session:
+        headers = {
+            "Crypto-Pay-API-Token": CRYPTO_TOKEN,
+            "Content-Type": "application/json"
+        }
+        data = {
+            "asset": "USDT",
+            "amount": str(amount),
+            "description": f"Вывод средств для {message.from_user.id}"
+        }
+        
+        async with session.post("https://testnet-pay.crypt.bot/api/createCheck", json=data, headers=headers) as resp:
+            result = await resp.json()
+            
+            if result.get("ok"):
+                check = result["result"]
+                
+                conn = await asyncpg.connect(DATABASE_URL)
+                await conn.execute("UPDATE users SET balance = balance - $1 WHERE id = $2", int(amount), message.from_user.id)
+                await conn.close()
+                
+                await message.answer(
+                    f"🎉 Чек создан!\n\n"
+                    f"Сумма: {amount} USDT\n"
+                    f"Ссылка: {check['check_url']}\n\n"
+                    f"Перейдите по ссылке и активируйте чек для получения средств"
+                )
+                await state.clear()
+            else:
+                await message.answer("❌ Ошибка создания чека. Попробуйте позже.")
+                await state.clear()
 
 @dp.callback_query(F.data == "crypto_bot")
 async def crypto_bot_deposit(callback: types.CallbackQuery, state: FSMContext):
@@ -310,6 +391,43 @@ async def play_stub(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "cancel_deposit")
 async def cancel_deposit(callback: types.CallbackQuery, state: FSMContext):
+    await state.clear()
+    
+    conn = await asyncpg.connect(DATABASE_URL)
+    user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", callback.from_user.id)
+    await conn.close()
+    
+    if not user:
+        await callback.message.answer("Ошибка. Напишите /start")
+        await callback.answer()
+        return
+    
+    rank_name, next_threshold = get_rank(user["total_bet"])
+    remaining = max(0, next_threshold - user["total_bet"])
+    reg_date = user["registered_at"].strftime("%d.%m.%Y")
+    
+    profile_text = (
+        f"<b>🔐 Ваш профиль</b>\n"
+        f"└ Текущий баланс: {user['balance']}$\n\n"
+        f"<blockquote>Зарегистрирован: {reg_date}</blockquote>\n"
+        f"<b>Ваш ранг: {rank_name}</b>\n"
+        f" ├ Оборот: {user['total_bet']}$\n"
+        f" └ Осталось: {remaining}$ из {next_threshold}$"
+    )
+    
+    photo = FSInputFile("IMG_0760.jpeg")
+    await callback.message.edit_media(
+        types.InputMediaPhoto(
+            media=photo,
+            caption=profile_text,
+            parse_mode=ParseMode.HTML
+        ),
+        reply_markup=get_profile_inline()
+    )
+    await callback.answer()
+
+@dp.callback_query(F.data == "cancel_withdraw")
+async def cancel_withdraw(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     
     conn = await asyncpg.connect(DATABASE_URL)
