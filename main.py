@@ -113,6 +113,18 @@ async def play_dummy(message: Message):
 async def handle_callbacks(callback: types.CallbackQuery):
     await callback.answer("🚧 В разработке", show_alert=True)
 
+@dp.message(Command("cleardb"))
+async def clear_db(message: Message):
+    if message.from_user.id != 123456789:
+        await message.answer("🚫 Нет доступа")
+        return
+    
+    conn = await asyncpg.connect(DATABASE_URL)
+    await conn.execute("DELETE FROM users")
+    await conn.close()
+    
+    await message.answer("✅ База данных очищена")
+
 async def main():
     await init_db()
     await dp.start_polling(bot)
