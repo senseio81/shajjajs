@@ -7,14 +7,15 @@ from dotenv import load_dotenv
 load_dotenv()
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-EMOJI_ID = "5413879192267805083"
-
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 @dp.message()
 async def handle(message: Message):
-    await message.answer(f'tg://emoji?id={EMOJI_ID}')
+    await message.answer(
+        '<tg-emoji emoji-id="5472288976221010328"> </tg-emoji>',
+        parse_mode="HTML"
+    )
 
 async def main():
     await dp.start_polling(bot)
