@@ -4,6 +4,8 @@ import os
 import aiohttp
 from datetime import datetime
 from io import StringIO
+from collections import defaultdict
+import time
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -12,7 +14,6 @@ from aiogram.enums import ParseMode
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.utils.rate_limit import rate_limit
 import asyncpg
 
 TOKEN = os.getenv("BOT_TOKEN")
@@ -27,6 +28,23 @@ storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
 user_invoice_messages = {}
+rate_limit_dict = defaultdict(list)
+
+def rate_limit(limit: int, period: int = 1):
+    def decorator(func):
+        async def wrapper(message: Message, *args, **kwargs):
+            user_id = message.from_user.id
+            now = time.time()
+            user_requests = rate_limit_dict[user_id]
+            user_requests = [t for t in user_requests if now - t < period]
+            if len(user_requests) >= limit:
+                await message.answer("⏳ Слишком много запросов, подождите немного")
+                return
+            user_requests.append(now)
+            rate_limit_dict[user_id] = user_requests
+            return await func(message, *args, **kwargs)
+        return wrapper
+    return decorator
 
 class DepositStates(StatesGroup):
     waiting_for_amount = State()
@@ -192,7 +210,7 @@ async def start_command(message: Message):
         reply_markup=get_main_keyboard()
     )
 
-@rate_limit(limit=10, key='profile')
+@rate_limit(limit=10)
 @dp.message(F.text == "💳 Профиль")
 async def profile_command(message: Message):
     await message.reply("🎲")
@@ -228,7 +246,6 @@ async def profile_command(message: Message):
         reply_markup=get_profile_inline()
     )
 
-@rate_limit(limit=10, key='deposit_callback')
 @dp.callback_query(F.data == "deposit")
 async def deposit_methods(callback: types.CallbackQuery):
     await log_action(callback.from_user.id, "deposit", "Открыто меню пополнения")
@@ -249,7 +266,6 @@ async def deposit_methods(callback: types.CallbackQuery):
     )
     await callback.answer()
 
-@rate_limit(limit=10, key='withdraw_callback')
 @dp.callback_query(F.data == "withdraw")
 async def withdraw_start(callback: types.CallbackQuery, state: FSMContext):
     await log_action(callback.from_user.id, "withdraw", "Начало вывода средств")
@@ -319,7 +335,6 @@ async def process_withdraw_amount(message: Message, state: FSMContext):
     
     await state.clear()
 
-@rate_limit(limit=5, key='admin_callback')
 @dp.callback_query(F.data.startswith("admin_logs_"))
 async def admin_logs(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
@@ -355,7 +370,6 @@ async def admin_logs(callback: types.CallbackQuery):
     )
     await callback.answer()
 
-@rate_limit(limit=5, key='admin_callback')
 @dp.callback_query(F.data.startswith("admin_approve_"))
 async def admin_approve(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
@@ -415,7 +429,6 @@ async def admin_approve(callback: types.CallbackQuery):
                 await callback.message.answer(f"❌ Ошибка создания чека: {result}")
                 await callback.answer("Ошибка")
 
-@rate_limit(limit=5, key='admin_callback')
 @dp.callback_query(F.data.startswith("admin_reject_"))
 async def admin_reject(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
@@ -455,7 +468,6 @@ async def admin_reject(callback: types.CallbackQuery):
     )
     await callback.answer("Заявка отклонена")
 
-@rate_limit(limit=10, key='deposit_callback')
 @dp.callback_query(F.data == "crypto_bot")
 async def crypto_bot_deposit(callback: types.CallbackQuery, state: FSMContext):
     await log_action(callback.from_user.id, "deposit_crypto", "Выбран способ CryptoBot")
@@ -583,18 +595,16 @@ async def check_payment(invoice_id):
                             del user_invoice_messages[invoice_id]
                         return
 
-@rate_limit(limit=10, key='play')
+@rate_limit(limit=10)
 @dp.message(F.text == "🎲 Играть")
 async def play_dummy(message: Message):
     await log_action(message.from_user.id, "play", "Кнопка игры (заглушка)")
     await message.answer("🎲 Игра в разработке 🛠")
 
-@rate_limit(limit=5, key='callback')
 @dp.callback_query(F.data == "play_stub")
 async def play_stub(callback: types.CallbackQuery):
     await callback.answer("🎲 Игра в разработке", show_alert=True)
 
-@rate_limit(limit=5, key='callback')
 @dp.callback_query(F.data == "cancel_deposit")
 async def cancel_deposit(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
@@ -633,7 +643,6 @@ async def cancel_deposit(callback: types.CallbackQuery, state: FSMContext):
     )
     await callback.answer()
 
-@rate_limit(limit=5, key='callback')
 @dp.callback_query(F.data == "cancel_withdraw")
 async def cancel_withdraw(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
@@ -672,7 +681,6 @@ async def cancel_withdraw(callback: types.CallbackQuery, state: FSMContext):
     )
     await callback.answer()
 
-@rate_limit(limit=10, key='referral_callback')
 @dp.callback_query(F.data == "referral")
 async def referral_program(callback: types.CallbackQuery):
     await log_action(callback.from_user.id, "referral", "Просмотр реферальной программы")
@@ -716,7 +724,6 @@ async def referral_program(callback: types.CallbackQuery):
     )
     await callback.answer()
 
-@rate_limit(limit=5, key='callback')
 @dp.callback_query(F.data == "back_to_profile")
 async def back_to_profile(callback: types.CallbackQuery):
     conn = await asyncpg.connect(DATABASE_URL)
