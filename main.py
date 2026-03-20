@@ -2,6 +2,8 @@ import asyncio
 import logging
 import os
 import aiohttp
+from datetime import datetime
+from io import StringIO
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -15,6 +17,7 @@ import asyncpg
 TOKEN = os.getenv("BOT_TOKEN")
 DATABASE_URL = os.getenv("DATABASE_URL")
 CRYPTO_TOKEN = os.getenv("CRYPTO_TOKEN")
+ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
 logging.basicConfig(level=logging.INFO)
 
@@ -44,7 +47,35 @@ async def init_db():
             referral_earnings INTEGER DEFAULT 0
         )
     """)
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS withdraw_requests (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT,
+            amount INTEGER,
+            status TEXT DEFAULT 'pending',
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            processed_at TIMESTAMP
+        )
+    """)
+    await conn.execute("""
+        CREATE TABLE IF NOT EXISTS logs (
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT,
+            action TEXT,
+            details TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    """)
     await conn.execute("CREATE INDEX IF NOT EXISTS idx_referrer_id ON users(referrer_id)")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_withdraw_requests_user_id ON withdraw_requests(user_id)")
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_user_id ON logs(user_id)")
+    await conn.close()
+
+async def log_action(user_id: int, action: str, details: str = ""):
+    conn = await asyncpg.connect(DATABASE_URL)
+    await conn.execute("""
+        INSERT INTO logs (user_id, action, details) VALUES ($1, $2, $3)
+    """, user_id, action, details)
     await conn.close()
 
 def get_rank(total_bet):
@@ -112,6 +143,24 @@ def get_play_inline():
         ]
     )
 
+def get_withdraw_request_inline(request_id: int, user_id: int):
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🔐 Логи", callback_data=f"admin_logs_{user_id}"),
+                InlineKeyboardButton(text="💳 Подтвердить", callback_data=f"admin_approve_{request_id}")
+            ],
+            [InlineKeyboardButton(text="💳 Отклонить", callback_data=f"admin_reject_{request_id}")]
+        ]
+    )
+
+def get_profile_only_inline():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔐 Профиль", callback_data="back_to_profile")]
+        ]
+    )
+
 @dp.message(Command("start"))
 async def start_command(message: Message):
     args = message.text.split()
@@ -129,6 +178,7 @@ async def start_command(message: Message):
         await conn.execute("""
             INSERT INTO users (id, username, referrer_id) VALUES ($1, $2, $3)
         """, message.from_user.id, message.from_user.username, referrer_id)
+        await log_action(message.from_user.id, "start", "Регистрация в боте")
     
     await conn.close()
     
@@ -149,6 +199,8 @@ async def profile_command(message: Message):
     if not user:
         await message.answer("Ошибка. Напишите /start")
         return
+    
+    await log_action(message.from_user.id, "profile", f"Просмотр профиля, баланс: {user['balance']}$")
     
     rank_name, next_threshold = get_rank(user["total_bet"])
     remaining = max(0, next_threshold - user["total_bet"])
@@ -173,6 +225,8 @@ async def profile_command(message: Message):
 
 @dp.callback_query(F.data == "deposit")
 async def deposit_methods(callback: types.CallbackQuery):
+    await log_action(callback.from_user.id, "deposit", "Открыто меню пополнения")
+    
     deposit_text = (
         f"<b>💳 Пополнение депозита</b>\n"
         f"└ Выберите удобный для вас способ оплаты:"
@@ -191,6 +245,8 @@ async def deposit_methods(callback: types.CallbackQuery):
 
 @dp.callback_query(F.data == "withdraw")
 async def withdraw_start(callback: types.CallbackQuery, state: FSMContext):
+    await log_action(callback.from_user.id, "withdraw", "Начало вывода средств")
+    
     withdraw_text = (
         f"<b>🎉 Вывод средств</b>\n"
         f"└ Введите сумму для вывода (мин. 1 USDT):"
@@ -221,12 +277,103 @@ async def process_withdraw_amount(message: Message, state: FSMContext):
     
     conn = await asyncpg.connect(DATABASE_URL)
     user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", message.from_user.id)
-    await conn.close()
     
     if not user or user["balance"] < amount:
+        await conn.close()
         await message.answer("❌ Недостаточно средств")
         await state.clear()
         return
+    
+    await conn.execute("UPDATE users SET balance = balance - $1 WHERE id = $2", int(amount), message.from_user.id)
+    
+    result = await conn.fetchrow("""
+        INSERT INTO withdraw_requests (user_id, amount) VALUES ($1, $2) RETURNING id
+    """, message.from_user.id, int(amount))
+    request_id = result["id"]
+    
+    await conn.close()
+    
+    await log_action(message.from_user.id, "withdraw_request", f"Создана заявка #{request_id} на сумму {amount} USDT")
+    
+    await message.answer(
+        "<b>💳 Заявка на вывод отправлена администрации, ожидайте!</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_profile_only_inline()
+    )
+    
+    username = f"@{message.from_user.username}" if message.from_user.username else f"ID:{message.from_user.id}"
+    
+    await bot.send_message(
+        ADMIN_ID,
+        f"<b>🎉 Новая заявка на вывод от пользователя {username} (ID: {message.from_user.id}) на сумму {amount} USDT!</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_withdraw_request_inline(request_id, message.from_user.id)
+    )
+    
+    await state.clear()
+
+@dp.callback_query(F.data.startswith("admin_logs_"))
+async def admin_logs(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("🚫 Нет доступа", show_alert=True)
+        return
+    
+    user_id = int(callback.data.split("_")[2])
+    
+    conn = await asyncpg.connect(DATABASE_URL)
+    logs = await conn.fetch("""
+        SELECT action, details, created_at FROM logs 
+        WHERE user_id = $1 
+        ORDER BY created_at DESC LIMIT 100
+    """, user_id)
+    await conn.close()
+    
+    log_text = f"Логи пользователя ID:{user_id}\n\n"
+    for log in logs:
+        log_text += f"[{log['created_at'].strftime('%d.%m.%Y %H:%M:%S')}] {log['action']}"
+        if log['details']:
+            log_text += f" - {log['details']}"
+        log_text += "\n"
+    
+    if not logs:
+        log_text = "Нет логов для этого пользователя"
+    
+    log_file = StringIO(log_text)
+    log_file.seek(0)
+    
+    await callback.message.answer_document(
+        types.BufferedInputFile(
+            log_text.encode('utf-8'),
+            filename=f"user_{user_id}_logs.txt"
+        ),
+        caption=f"📋 Логи пользователя ID:{user_id}"
+    )
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("admin_approve_"))
+async def admin_approve(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("🚫 Нет доступа", show_alert=True)
+        return
+    
+    request_id = int(callback.data.split("_")[2])
+    
+    conn = await asyncpg.connect(DATABASE_URL)
+    request = await conn.fetchrow("SELECT * FROM withdraw_requests WHERE id = $1 AND status = 'pending'", request_id)
+    
+    if not request:
+        await conn.close()
+        await callback.answer("Заявка уже обработана", show_alert=True)
+        return
+    
+    await conn.execute("""
+        UPDATE withdraw_requests SET status = 'approved', processed_at = CURRENT_TIMESTAMP WHERE id = $1
+    """, request_id)
+    
+    user = await conn.fetchrow("SELECT username FROM users WHERE id = $1", request["user_id"])
+    await conn.close()
+    
+    await log_action(request["user_id"], "withdraw_approved", f"Заявка #{request_id} на сумму {request['amount']} USDT одобрена")
     
     async with aiohttp.ClientSession() as session:
         headers = {
@@ -235,39 +382,76 @@ async def process_withdraw_amount(message: Message, state: FSMContext):
         }
         data = {
             "asset": "USDT",
-            "amount": str(amount),
-            "description": f"Вывод средств для {message.from_user.id}"
+            "amount": str(request["amount"]),
+            "description": f"Вывод средств для {request['user_id']}"
         }
         
         async with session.post("https://testnet-pay.crypt.bot/api/createCheck", json=data, headers=headers) as resp:
             result = await resp.json()
             
-            print(f"=== WITHDRAW DEBUG ===")
-            print(f"Status: {resp.status}")
-            print(f"Response: {result}")
-            print(f"=====================")
-            
             if result.get("ok"):
                 check = result["result"]
                 
-                conn = await asyncpg.connect(DATABASE_URL)
-                await conn.execute("UPDATE users SET balance = balance - $1 WHERE id = $2", int(amount), message.from_user.id)
-                await conn.close()
-                
-                await message.answer(
+                await bot.send_message(
+                    request["user_id"],
                     f"🎉 Чек создан!\n\n"
-                    f"Сумма: {amount} USDT\n"
+                    f"Сумма: {request['amount']} USDT\n"
                     f"Ссылка: {check['bot_check_url']}\n\n"
                     f"Перейдите по ссылке и активируйте чек для получения средств"
                 )
-                await state.clear()
+                
+                await callback.message.edit_text(
+                    f"✅ Заявка #{request_id} подтверждена, чек отправлен пользователю",
+                    reply_markup=None
+                )
+                await callback.answer("Чек отправлен")
             else:
-                error_msg = result.get('error', result)
-                await message.answer(f"❌ Ошибка создания чека: {error_msg}\n\nПроверьте токен и попробуйте позже.")
-                await state.clear()
+                await callback.message.answer(f"❌ Ошибка создания чека: {result}")
+                await callback.answer("Ошибка")
+
+@dp.callback_query(F.data.startswith("admin_reject_"))
+async def admin_reject(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("🚫 Нет доступа", show_alert=True)
+        return
+    
+    request_id = int(callback.data.split("_")[2])
+    
+    conn = await asyncpg.connect(DATABASE_URL)
+    request = await conn.fetchrow("SELECT * FROM withdraw_requests WHERE id = $1 AND status = 'pending'", request_id)
+    
+    if not request:
+        await conn.close()
+        await callback.answer("Заявка уже обработана", show_alert=True)
+        return
+    
+    await conn.execute("""
+        UPDATE withdraw_requests SET status = 'rejected', processed_at = CURRENT_TIMESTAMP WHERE id = $1
+    """, request_id)
+    
+    await conn.execute("UPDATE users SET balance = balance + $1 WHERE id = $2", request["amount"], request["user_id"])
+    
+    await conn.close()
+    
+    await log_action(request["user_id"], "withdraw_rejected", f"Заявка #{request_id} на сумму {request['amount']} USDT отклонена")
+    
+    await bot.send_message(
+        request["user_id"],
+        "<b>😔 Ваша заявка на вывод была отклонена, свяжитесь со службой поддержки.</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_profile_only_inline()
+    )
+    
+    await callback.message.edit_text(
+        f"❌ Заявка #{request_id} отклонена, средства возвращены пользователю",
+        reply_markup=None
+    )
+    await callback.answer("Заявка отклонена")
 
 @dp.callback_query(F.data == "crypto_bot")
 async def crypto_bot_deposit(callback: types.CallbackQuery, state: FSMContext):
+    await log_action(callback.from_user.id, "deposit_crypto", "Выбран способ CryptoBot")
+    
     amount_text = (
         f"<b>💳 Пополнение депозита</b>\n"
         f"└ Введите сумму для оплаты:"
@@ -295,6 +479,8 @@ async def process_deposit_amount(message: Message, state: FSMContext):
     except:
         await message.answer("❌ Введите число")
         return
+    
+    await log_action(message.from_user.id, "deposit_request", f"Создание инвойса на {amount} USDT")
     
     async with aiohttp.ClientSession() as session:
         headers = {
@@ -366,6 +552,8 @@ async def check_payment(invoice_id):
                             await conn.execute("UPDATE users SET balance = balance + $1 WHERE id = $2", int(amount), user_id)
                             await conn.close()
                             
+                            await log_action(user_id, "deposit_success", f"Пополнение на {amount} USDT")
+                            
                             await bot.send_message(
                                 user_id,
                                 "🎉"
@@ -389,6 +577,7 @@ async def check_payment(invoice_id):
 
 @dp.message(F.text == "🎲 Играть")
 async def play_dummy(message: Message):
+    await log_action(message.from_user.id, "play", "Кнопка игры (заглушка)")
     await message.answer("🎲 Игра в разработке 🛠")
 
 @dp.callback_query(F.data == "play_stub")
@@ -398,6 +587,7 @@ async def play_stub(callback: types.CallbackQuery):
 @dp.callback_query(F.data == "cancel_deposit")
 async def cancel_deposit(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
+    await log_action(callback.from_user.id, "deposit_cancel", "Отмена пополнения")
     
     conn = await asyncpg.connect(DATABASE_URL)
     user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", callback.from_user.id)
@@ -435,6 +625,7 @@ async def cancel_deposit(callback: types.CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data == "cancel_withdraw")
 async def cancel_withdraw(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
+    await log_action(callback.from_user.id, "withdraw_cancel", "Отмена вывода")
     
     conn = await asyncpg.connect(DATABASE_URL)
     user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", callback.from_user.id)
@@ -471,6 +662,8 @@ async def cancel_withdraw(callback: types.CallbackQuery, state: FSMContext):
 
 @dp.callback_query(F.data == "referral")
 async def referral_program(callback: types.CallbackQuery):
+    await log_action(callback.from_user.id, "referral", "Просмотр реферальной программы")
+    
     conn = await asyncpg.connect(DATABASE_URL)
     
     referrals = await conn.fetch("SELECT * FROM users WHERE referrer_id = $1", callback.from_user.id)
@@ -543,18 +736,6 @@ async def back_to_profile(callback: types.CallbackQuery):
 @dp.callback_query()
 async def handle_callbacks(callback: types.CallbackQuery):
     await callback.answer("🚧 В разработке", show_alert=True)
-
-@dp.message(Command("cleardb"))
-async def clear_db(message: Message):
-    if message.from_user.id != 123456789:
-        await message.answer("🚫 Нет доступа")
-        return
-    
-    conn = await asyncpg.connect(DATABASE_URL)
-    await conn.execute("DELETE FROM users")
-    await conn.close()
-    
-    await message.answer("✅ База данных очищена")
 
 async def main():
     await init_db()
