@@ -275,7 +275,7 @@ async def withdraw_start(callback: types.CallbackQuery, state: FSMContext):
         f"└ Введите сумму для вывода (мин. 1 USDT):"
     )
     
-    photo = FSInputFile("IMG_0757.jpeg")
+    photo = FSInputFile("IMG_0764.jpeg")
     await callback.message.edit_media(
         types.InputMediaPhoto(
             media=photo,
