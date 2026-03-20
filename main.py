@@ -19,8 +19,9 @@ dp = Dispatcher()
 
 async def init_db():
     conn = await asyncpg.connect(DATABASE_URL)
+    await conn.execute("DROP TABLE IF EXISTS users")
     await conn.execute("""
-        CREATE TABLE IF NOT EXISTS users (
+        CREATE TABLE users (
             id BIGINT PRIMARY KEY,
             username TEXT,
             balance INTEGER DEFAULT 0,
