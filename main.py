@@ -26,9 +26,12 @@ async def init_db():
             username TEXT,
             balance INTEGER DEFAULT 0,
             total_bet INTEGER DEFAULT 0,
-            registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            referrer_id BIGINT,
+            referral_earnings INTEGER DEFAULT 0
         )
     """)
+    await conn.execute("CREATE INDEX IF NOT EXISTS idx_referrer_id ON users(referrer_id)")
     await conn.close()
 
 def get_rank(total_bet):
@@ -60,13 +63,31 @@ def get_profile_inline():
         ]
     )
 
+def get_referral_inline():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_profile")]
+        ]
+    )
+
 @dp.message(Command("start"))
 async def start_command(message: Message):
+    args = message.text.split()
+    referrer_id = None
+    if len(args) > 1:
+        try:
+            referrer_id = int(args[1])
+        except:
+            pass
+    
     conn = await asyncpg.connect(DATABASE_URL)
-    await conn.execute("""
-        INSERT INTO users (id, username) VALUES ($1, $2)
-        ON CONFLICT (id) DO NOTHING
-    """, message.from_user.id, message.from_user.username)
+    
+    user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", message.from_user.id)
+    if not user:
+        await conn.execute("""
+            INSERT INTO users (id, username, referrer_id) VALUES ($1, $2, $3)
+        """, message.from_user.id, message.from_user.username, referrer_id)
+    
     await conn.close()
     
     await message.answer(
@@ -111,6 +132,77 @@ async def profile_command(message: Message):
 @dp.message(F.text == "🎲 Играть")
 async def play_dummy(message: Message):
     await message.answer("🎲 Игра в разработке 🛠")
+
+@dp.callback_query(F.data == "referral")
+async def referral_program(callback: types.CallbackQuery):
+    conn = await asyncpg.connect(DATABASE_URL)
+    
+    referrals = await conn.fetch("SELECT * FROM users WHERE referrer_id = $1", callback.from_user.id)
+    invited = len(referrals)
+    
+    active = 0
+    for ref in referrals:
+        if ref["total_bet"] > 0:
+            active += 1
+    
+    user = await conn.fetchrow("SELECT referral_earnings FROM users WHERE id = $1", callback.from_user.id)
+    await conn.close()
+    
+    bot_username = (await bot.get_me()).username
+    referral_link = f"https://t.me/{bot_username}?start={callback.from_user.id}"
+    
+    referral_text = (
+        f"<b>🧩 Реферальная программа</b>\n\n"
+        f"<b>💳 Процент от проигрышей реферала:</b>\n"
+        f"<blockquote>• 5% от каждого реферала</blockquote>\n\n"
+        f"<b>👾 Ваша статистика:</b>\n"
+        f"├ Приглашено: {invited} чел.\n"
+        f"├ Активных: {active} чел.\n"
+        f"└ Заработано: {user['referral_earnings']:.2f}$\n\n"
+        f"<b>🎉 Ваша ссылка:</b>\n"
+        f"{referral_link}"
+    )
+    
+    photo = FSInputFile("IMG_0763.jpeg")
+    await callback.message.edit_media(
+        types.InputMediaPhoto(
+            media=photo,
+            caption=referral_text,
+            parse_mode=ParseMode.HTML
+        ),
+        reply_markup=get_referral_inline()
+    )
+    await callback.answer()
+
+@dp.callback_query(F.data == "back_to_profile")
+async def back_to_profile(callback: types.CallbackQuery):
+    conn = await asyncpg.connect(DATABASE_URL)
+    user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", callback.from_user.id)
+    await conn.close()
+    
+    rank_name, next_threshold = get_rank(user["total_bet"])
+    remaining = max(0, next_threshold - user["total_bet"])
+    reg_date = user["registered_at"].strftime("%d.%m.%Y")
+    
+    profile_text = (
+        f"<b>🔐 Ваш профиль</b>\n"
+        f"└ Текущий баланс: {user['balance']}$\n\n"
+        f"<blockquote>Зарегистрирован: {reg_date}</blockquote>\n"
+        f"<b>Ваш ранг: {rank_name}</b>\n"
+        f" ├ Оборот: {user['total_bet']}$\n"
+        f" └ Осталось: {remaining}$ из {next_threshold}$"
+    )
+    
+    photo = FSInputFile("IMG_0760.jpeg")
+    await callback.message.edit_media(
+        types.InputMediaPhoto(
+            media=photo,
+            caption=profile_text,
+            parse_mode=ParseMode.HTML
+        ),
+        reply_markup=get_profile_inline()
+    )
+    await callback.answer()
 
 @dp.callback_query()
 async def handle_callbacks(callback: types.CallbackQuery):
