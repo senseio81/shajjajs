@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 import aiohttp
-
+#by HOT CASINO
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
