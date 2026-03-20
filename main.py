@@ -3,7 +3,7 @@ import sys
 import logging
 import os
 import asyncio
-
+#hshs
 # Автоустановка
 try:
     from telegram.ext import Application, CommandHandler
