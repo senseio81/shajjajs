@@ -407,6 +407,14 @@ async def plane_stub(callback: types.CallbackQuery):
 @rate_limit(limit=10)
 @dp.callback_query(F.data == "game_bowling")
 async def bowling_menu(callback: types.CallbackQuery):
+    conn = await asyncpg.connect(DATABASE_URL)
+    user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", callback.from_user.id)
+    await conn.close()
+    
+    if user["balance"] < 30:
+        await callback.answer("💳 Минимальная ставка 0.30 USDT, пополните баланс", show_alert=True)
+        return
+    
     photo = FSInputFile("IMG_0772.jpeg")
     await callback.message.edit_media(
         types.InputMediaPhoto(
