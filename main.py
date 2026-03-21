@@ -7,12 +7,11 @@ from datetime import datetime
 from io import StringIO
 from collections import defaultdict
 import time
-#оо
-from aiogram.enums import ParseMode, ContentType
+
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
-from aiogram.enums import ParseMode
+from aiogram.enums import ParseMode, ContentType
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -23,7 +22,8 @@ DATABASE_URL = os.getenv("DATABASE_URL")
 CRYPTO_TOKEN = os.getenv("CRYPTO_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 bot = Bot(token=TOKEN)
 storage = MemoryStorage()
@@ -501,20 +501,21 @@ async def show_bet_request(message, user_id, state, mode_name, coeff):
 
 @dp.message(GameStates.waiting_for_bet)
 async def process_bet(message: Message, state: FSMContext):
-    logging.info("=== process_bet START ===")
+    logger.info(f"=== process_bet START for user {message.from_user.id} ===")
     
     try:
         bet = float(message.text.replace(",", "."))
-        logging.info(f"Bet: {bet}")
+        logger.info(f"Bet amount: {bet}")
         if bet < 0.30:
             await message.answer("❌ Минимальная ставка 0.30 USDT")
             return
     except:
+        logger.error(f"Invalid bet format: {message.text}")
         await message.answer("❌ Введите число")
         return
     
     data = await state.get_data()
-    logging.info(f"Game data: {data}")
+    logger.info(f"Game data from state: {data}")
     
     game_mode = data.get("game_mode")
     coeff = data.get("coeff", 1.85)
@@ -540,24 +541,29 @@ async def process_bet(message: Message, state: FSMContext):
         "state": state
     }
     
-    logging.info("Sending dice...")
+    logger.info(f"Saved dice data for user {message.from_user.id}: {user_dice_data[message.from_user.id]}")
+    logger.info("Sending dice...")
     await message.answer_dice(emoji="🎲")
-    logging.info("Dice sent")
+    logger.info("Dice sent, waiting for response...")
 
-from aiogram.filters import ContentTypeFilter
-
-from aiogram.enums import ContentType
-
-# Замените обработчик @dp.message(F.dice) на:
-
+# ========== ИСПРАВЛЕННЫЙ ОБРАБОТЧИК DICE С ЖЕСТКОЙ ОТЛАДКОЙ ==========
 @dp.message(F.content_type == ContentType.DICE)
 async def handle_dice(message: Message):
+    logger.info("=" * 50)
+    logger.info(f"DICE HANDLER TRIGGERED!")
+    logger.info(f"User ID: {message.from_user.id}")
+    logger.info(f"Dice value: {message.dice.value}")
+    logger.info(f"Dice emoji: {message.dice.emoji}")
+    logger.info(f"user_dice_data keys: {list(user_dice_data.keys())}")
+    
     user_id = message.from_user.id
-    logging.info(f"Dice received from {user_id}, value: {message.dice.value}")
     
     if user_id not in user_dice_data:
-        logging.warning(f"Dice from {user_id} but no data found")
+        logger.warning(f"NO DICE DATA FOUND for user {user_id}")
+        logger.warning(f"Available data: {user_dice_data}")
         return
+    
+    logger.info(f"Found dice data for user {user_id}: {user_dice_data[user_id]}")
     
     data = user_dice_data.pop(user_id)
     bet = data["bet"]
@@ -567,8 +573,8 @@ async def handle_dice(message: Message):
     state = data["state"]
     
     dice_value = message.dice.value
+    logger.info(f"Processing: mode={game_mode}, bet={bet}, coeff={coeff}, dice={dice_value}")
     
-    # Определяем победу в зависимости от режима
     if game_mode == "even":
         win = dice_value % 2 == 0
         mode_text = "Четное"
@@ -588,10 +594,11 @@ async def handle_dice(message: Message):
         win = False
         mode_text = "Неизвестно"
     
-    logging.info(f"Game mode: {game_mode}, Win: {win}, Dice value: {dice_value}")
+    logger.info(f"Result: win={win}, mode_text={mode_text}")
     
     if win:
         win_amount = bet * coeff
+        logger.info(f"WIN! Amount: {win_amount}")
         conn = await asyncpg.connect(DATABASE_URL)
         await conn.execute("UPDATE users SET balance = balance + $1, total_bet = total_bet + $2 WHERE id = $3", 
                           int(win_amount * 100), int(bet * 100), user_id)
@@ -600,30 +607,20 @@ async def handle_dice(message: Message):
         result_text = "✅ Победа!"
         photo = FSInputFile("IMG_0770.jpeg")
         await log_action(user_id, "dice_win", f"Выигрыш {win_amount}$ (ставка {bet}$, режим {mode_text}, значение {dice_value})")
-        
-        # Добавляем реферальные отчисления (5% от проигрыша реферала)
-        # При выигрыше реферальные отчисления не начисляются
+        logger.info(f"User {user_id} won {win_amount}$")
     else:
+        logger.info(f"LOSS! Amount: {bet}")
         conn = await asyncpg.connect(DATABASE_URL)
         await conn.execute("UPDATE users SET total_bet = total_bet + $1 WHERE id = $2", int(bet * 100), user_id)
-        
-        # Начисляем реферальные отчисления (5% от суммы ставки)
-        user = await conn.fetchrow("SELECT referrer_id FROM users WHERE id = $1", user_id)
-        if user and user["referrer_id"]:
-            referrer_bonus = int(bet * 100 * 0.05)  # 5% от ставки
-            await conn.execute("UPDATE users SET balance = balance + $1, referral_earnings = referral_earnings + $2 WHERE id = $3", 
-                              referrer_bonus, referrer_bonus, user["referrer_id"])
-            await log_action(user["referrer_id"], "referral_earning", f"Начислено {referrer_bonus/100}$ за проигрыш реферала {user_id}")
-        
         await conn.close()
         
         result_text = "🚫 Поражение. Попробуй снова!"
         photo = FSInputFile("IMG_0769.jpeg")
         await log_action(user_id, "dice_lose", f"Проигрыш {bet}$ (режим {mode_text}, значение {dice_value})")
+        logger.info(f"User {user_id} lost {bet}$")
     
     quote = random.choice(casino_quotes)
     
-    # Получаем обновленный баланс
     conn = await asyncpg.connect(DATABASE_URL)
     user = await conn.fetchrow("SELECT balance FROM users WHERE id = $1", user_id)
     await conn.close()
@@ -631,22 +628,22 @@ async def handle_dice(message: Message):
     result_message = (
         f"{result_text}\n\n"
         f"<blockquote>Выпало значение: {dice_value}</blockquote>\n"
-        f"<blockquote>Ваша ставка: {bet}$</blockquote>\n"
         f"<blockquote>Коэффициент: {coeff}x</blockquote>\n"
         f"<blockquote>Ваш баланс: {user['balance']/100}$</blockquote>\n"
         f"<blockquote>{quote}</blockquote>"
     )
     
+    logger.info(f"Sending result to user {user_id}")
     await message.answer_photo(
         photo=photo,
         caption=result_message,
         parse_mode=ParseMode.HTML,
         reply_markup=get_make_bet_inline()
     )
-    
-    # Очищаем состояние
     await state.clear()
-    
+    logger.info(f"DICE HANDLER FINISHED for user {user_id}")
+    logger.info("=" * 50)
+
 @rate_limit(limit=10)
 @dp.callback_query(F.data == "make_bet")
 async def make_bet(callback: types.CallbackQuery):
@@ -1246,6 +1243,7 @@ async def handle_callbacks(callback: types.CallbackQuery):
 
 async def main():
     await init_db()
+    logger.info("Bot started!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
