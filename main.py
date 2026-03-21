@@ -31,15 +31,26 @@ dp = Dispatcher(storage=storage)
 user_invoice_messages = {}
 rate_limit_dict = defaultdict(list)
 
-casino_quotes = [
-    "Удача любит смелых!",
-    "Казино всегда выигрывает... но не сегодня!",
-    "Веришь в удачу?",
-    "Фортуна улыбнулась тебе!",
-    "В следующий раз повезёт больше!",
-    "Азарт — это наше всё!",
-    "Сегодня твой день!",
-    "Главное — не останавливаться!"
+win_quotes = [
+    "В этот раз удача выбрала тебя. Поздравляю!",
+    "Твой риск был оправдан — забирай выигрыш!",
+    "Фортуна сегодня работает на тебя. Не останавливайся!",
+    "Идеальный момент — ты его поймал. Отлично сыграно!",
+    "Казино помнит таких игроков. Продолжай в том же духе!",
+    "Ты читаешь игру как открытую книгу. Великолепно!",
+    "Даже крупье аплодирует твоему ходу. Шикарная ставка!",
+    "Интуиция не подвела — это твой день!"
+]
+
+lose_quotes = [
+    "Сегодня не твой день, но это всего лишь повод взять паузу.",
+    "Даже лучшие игроки проигрывают. Главное — вернуться сильнее.",
+    "Удача любит упорных. Следующая ставка будет твоей.",
+    "Проигрыш — это не поражение, а опыт. Идём дальше.",
+    "Казино не дремлет, но и ты не сдавайся. Следующий ход за тобой!",
+    "Фортуна отвлеклась, но она обязательно вернётся. Продолжай играть!",
+    "Это всего лишь разминка. Настоящая игра только начинается!",
+    "Не позволяй одному броску испортить настрой. Впереди джекпот!"
 ]
 
 def rate_limit(limit: int, period: int = 1):
@@ -525,8 +536,8 @@ async def process_bet(message: Message, state: FSMContext):
     await conn.execute("UPDATE users SET balance = balance - $1 WHERE id = $2", int(bet * 100), message.from_user.id)
     await conn.close()
     
-    await asyncio.sleep(3)
     dice_msg = await message.reply_dice(emoji="🎲")
+    await asyncio.sleep(2)
     dice_value = dice_msg.dice.value
     
     if game_mode == "even":
@@ -555,26 +566,26 @@ async def process_bet(message: Message, state: FSMContext):
                           int(win_amount * 100), int(bet * 100), message.from_user.id)
         await conn.close()
         
-        result_text = "✅ Победа!"
+        result_text = "🎉 <b>Победа. Поздравляем!</b>"
         win_text = f"\n\n<blockquote>Начислено: {win_amount} USDT</blockquote>"
         photo = FSInputFile("IMG_0770.jpeg")
+        quote = random.choice(win_quotes)
         await log_action(message.from_user.id, "dice_win", f"Выигрыш {win_amount}$ (ставка {bet}$, режим {mode_text}, значение {dice_value})")
     else:
         conn = await asyncpg.connect(DATABASE_URL)
         await conn.execute("UPDATE users SET total_bet = total_bet + $1 WHERE id = $2", int(bet * 100), message.from_user.id)
         await conn.close()
         
-        result_text = "🚫 Поражение. Попробуй снова!"
+        result_text = "🚫 <b>Поражение. Повезет в следующий раз!</b>"
         win_text = ""
         photo = FSInputFile("IMG_0769.jpeg")
+        quote = random.choice(lose_quotes)
         await log_action(message.from_user.id, "dice_lose", f"Проигрыш {bet}$ (режим {mode_text}, значение {dice_value})")
-    
-    quote = random.choice(casino_quotes)
     
     result_message = (
         f"{result_text}\n\n"
         f"<blockquote>Выпало значение: {dice_value}</blockquote>\n"
-        f"<blockquote>Коэффициент: {coeff}x</blockquote>"
+        f"<blockquote>Коэффициент: {coeff}x</blockquote>\n"
         f"{win_text}\n"
         f"<blockquote>{quote}</blockquote>"
     )
