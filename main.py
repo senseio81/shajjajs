@@ -1,23 +1,27 @@
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.types import Message
+from aiogram.filters import Command
 import asyncio
 import os
 import logging
 
 logging.basicConfig(level=logging.INFO)
 
-TOKEN = os.getenv("BOT_TOKEN")
-bot = Bot(token=TOKEN)
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise ValueError("Токен не найден! Укажите переменную окружения BOT_TOKEN")
+
+bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
 user_data = {}
 
-@dp.message()
+@dp.message(Command("start"))
 async def start(message: Message):
     await message.answer("Введи любое число (например 5)")
     user_data[message.from_user.id] = {}
 
-@dp.message()
+@dp.message(F.text.regexp(r"^\d+(\.\d+)?$"))
 async def handle_number(message: Message):
     try:
         bet = float(message.text)
