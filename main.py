@@ -340,8 +340,11 @@ async def profile_command(message: Message):
 @dp.message(F.text == "🎲 Играть")
 async def games_menu(message: Message):
     await message.reply("💎")
-    await message.answer(
-        "<b>🎉 Раздел доступных режимов</b>\n└ Выберите игру:",
+    
+    photo = FSInputFile("IMG_0754.jpeg")
+    await message.answer_photo(
+        photo=photo,
+        caption="<b>🎉 Раздел доступных режимов</b>\n└ Выберите игру:",
         parse_mode=ParseMode.HTML,
         reply_markup=get_games_menu()
     )
