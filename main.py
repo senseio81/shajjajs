@@ -534,12 +534,15 @@ async def process_bet(message: Message, state: FSMContext):
         "state": state
     }
     
-    await message.reply_dice(emoji="🎲")
+    await message.answer_dice(emoji="🎲")
 
-@dp.message(F.dice)
+@dp.message(F.content_type == "dice")
 async def handle_dice(message: Message):
     user_id = message.from_user.id
+    logging.info(f"Dice received from {user_id}, value: {message.dice.value}")
+    
     if user_id not in user_dice_data:
+        logging.warning(f"Dice from {user_id} but no data found")
         return
     
     data = user_dice_data.pop(user_id)
