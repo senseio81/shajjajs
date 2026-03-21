@@ -34,9 +34,56 @@ dp = Dispatcher(storage=storage)
 # ============ ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ============
 user_invoice_messages = {}
 rate_limit_dict = defaultdict(list)
-user_dice_data = {}
 
-# ============ ЦИТАТЫ ДЛЯ КАЗИНО ============
+# ============ УМНЫЙ МЕНЕДЖЕР КУБИКОВ ============
+class DiceGameManager:
+    """Умный менеджер для управления играми с кубиком"""
+    
+    def __init__(self):
+        self.active_games = {}  # {user_id: game_data}
+    
+    async def start_game(self, user_id: int, bet: float, game_mode: str, coeff: float, sector: int = None):
+        """
+        Начинает игру и ждет результат кубика
+        Возвращает значение кубика или None при ошибке
+        """
+        # Создаем событие для ожидания
+        event = asyncio.Event()
+        
+        # Сохраняем данные игры
+        self.active_games[user_id] = {
+            "bet": bet,
+            "game_mode": game_mode,
+            "coeff": coeff,
+            "sector": sector,
+            "event": event,
+            "dice_value": None
+        }
+        
+        # Ждем результат (до 10 секунд)
+        try:
+            await asyncio.wait_for(event.wait(), timeout=10.0)
+            dice_value = self.active_games[user_id]["dice_value"]
+            return dice_value
+        except asyncio.TimeoutError:
+            logger.warning(f"Таймаут: пользователь {user_id} не получил результат кубика")
+            return None
+        finally:
+            # Очищаем данные игры
+            if user_id in self.active_games:
+                del self.active_games[user_id]
+    
+    def on_dice_result(self, user_id: int, dice_value: int):
+        """Вызывается когда приходит результат кубика"""
+        if user_id in self.active_games:
+            self.active_games[user_id]["dice_value"] = dice_value
+            self.active_games[user_id]["event"].set()
+            logger.info(f"Результат кубика для {user_id}: {dice_value}")
+
+# Создаем экземпляр менеджера
+dice_manager = DiceGameManager()
+
+# ============ ЦИТАТЫ ============
 casino_quotes = [
     "Удача любит смелых!",
     "Казино всегда выигрывает... но не сегодня!",
@@ -48,7 +95,7 @@ casino_quotes = [
     "Главное — не останавливаться!"
 ]
 
-# ============ ДЕКОРАТОР ЛИМИТА ЗАПРОСОВ ============
+# ============ ДЕКОРАТОР ЛИМИТА ============
 def rate_limit(limit: int, period: int = 1):
     def decorator(func):
         async def wrapper(event, *args, **kwargs):
@@ -88,7 +135,7 @@ class BroadcastStates(StatesGroup):
 class GameStates(StatesGroup):
     waiting_for_bet = State()
 
-# ============ РАБОТА С БАЗОЙ ДАННЫХ ============
+# ============ РАБОТА С БАЗОЙ ============
 async def init_db():
     conn = await asyncpg.connect(DATABASE_URL)
     await conn.execute("""
@@ -121,22 +168,17 @@ async def init_db():
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
-    await conn.execute("CREATE INDEX IF NOT EXISTS idx_referrer_id ON users(referrer_id)")
-    await conn.execute("CREATE INDEX IF NOT EXISTS idx_withdraw_requests_user_id ON withdraw_requests(user_id)")
-    await conn.execute("CREATE INDEX IF NOT EXISTS idx_logs_user_id ON logs(user_id)")
     await conn.close()
 
 async def log_action(user_id: int, action: str, details: str = ""):
     try:
         conn = await asyncpg.connect(DATABASE_URL)
-        await conn.execute("""
-            INSERT INTO logs (user_id, action, details) VALUES ($1, $2, $3)
-        """, user_id, action, details)
+        await conn.execute("INSERT INTO logs (user_id, action, details) VALUES ($1, $2, $3)", 
+                          user_id, action, details)
         await conn.close()
     except Exception as e:
         logger.error(f"Log action error: {e}")
 
-# ============ ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ============
 def get_rank(total_bet):
     if total_bet < 50:
         return "👾 Новичок", 50
@@ -150,28 +192,22 @@ def get_rank(total_bet):
 # ============ КЛАВИАТУРЫ ============
 def get_main_keyboard():
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="🎲 Играть"), KeyboardButton(text="💳 Профиль")]
-        ],
+        keyboard=[[KeyboardButton(text="🎲 Играть"), KeyboardButton(text="💳 Профиль")]],
         resize_keyboard=True
     )
 
 def get_profile_inline():
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(text="💳 Пополнить", callback_data="deposit"),
-                InlineKeyboardButton(text="🎉 Вывести", callback_data="withdraw")
-            ],
+            [InlineKeyboardButton(text="💳 Пополнить", callback_data="deposit"),
+             InlineKeyboardButton(text="🎉 Вывести", callback_data="withdraw")],
             [InlineKeyboardButton(text="🧩 Реферальная программа", callback_data="referral")]
         ]
     )
 
 def get_referral_inline():
     return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_profile")]
-        ]
+        inline_keyboard=[[InlineKeyboardButton(text="🔙 Назад", callback_data="back_to_profile")]]
     )
 
 def get_deposit_methods_inline():
@@ -184,47 +220,35 @@ def get_deposit_methods_inline():
 
 def get_cancel_inline():
     return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🔐 Отменить", callback_data="cancel_deposit")]
-        ]
+        inline_keyboard=[[InlineKeyboardButton(text="🔐 Отменить", callback_data="cancel_deposit")]]
     )
 
 def get_cancel_withdraw_inline():
     return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🔐 Отменить", callback_data="cancel_withdraw")]
-        ]
+        inline_keyboard=[[InlineKeyboardButton(text="🔐 Отменить", callback_data="cancel_withdraw")]]
     )
 
 def get_withdraw_request_inline(request_id: int, user_id: int):
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(text="🔐 Логи", callback_data=f"admin_logs_{user_id}"),
-                InlineKeyboardButton(text="💳 Подтвердить", callback_data=f"admin_approve_{request_id}")
-            ],
+            [InlineKeyboardButton(text="🔐 Логи", callback_data=f"admin_logs_{user_id}"),
+             InlineKeyboardButton(text="💳 Подтвердить", callback_data=f"admin_approve_{request_id}")],
             [InlineKeyboardButton(text="💳 Отклонить", callback_data=f"admin_reject_{request_id}")]
         ]
     )
 
 def get_profile_only_inline():
     return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🔐 Профиль", callback_data="back_to_profile")]
-        ]
+        inline_keyboard=[[InlineKeyboardButton(text="🔐 Профиль", callback_data="back_to_profile")]]
     )
 
 def get_games_menu():
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(text="🎲 Кубик", callback_data="game_dice"),
-                InlineKeyboardButton(text="🎯 Дартс", callback_data="game_darts")
-            ],
-            [
-                InlineKeyboardButton(text="🛩️ Самолетик", callback_data="game_plane"),
-                InlineKeyboardButton(text="🎳 Боулинг", callback_data="game_bowling")
-            ],
+            [InlineKeyboardButton(text="🎲 Кубик", callback_data="game_dice"),
+             InlineKeyboardButton(text="🎯 Дартс", callback_data="game_darts")],
+            [InlineKeyboardButton(text="🛩️ Самолетик", callback_data="game_plane"),
+             InlineKeyboardButton(text="🎳 Боулинг", callback_data="game_bowling")],
             [InlineKeyboardButton(text="« Назад", callback_data="back_to_profile")]
         ]
     )
@@ -232,14 +256,10 @@ def get_games_menu():
 def get_dice_modes():
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(text="🎲 Четное", callback_data="dice_even"),
-                InlineKeyboardButton(text="🎲 Нечетное", callback_data="dice_odd")
-            ],
-            [
-                InlineKeyboardButton(text="🎲 Сектора", callback_data="dice_sector"),
-                InlineKeyboardButton(text="🎲 Больше/Меньше", callback_data="dice_overunder")
-            ],
+            [InlineKeyboardButton(text="🎲 Четное", callback_data="dice_even"),
+             InlineKeyboardButton(text="🎲 Нечетное", callback_data="dice_odd")],
+            [InlineKeyboardButton(text="🎲 Сектора", callback_data="dice_sector"),
+             InlineKeyboardButton(text="🎲 Больше/Меньше", callback_data="dice_overunder")],
             [InlineKeyboardButton(text="« Назад", callback_data="back_to_games")]
         ]
     )
@@ -247,10 +267,8 @@ def get_dice_modes():
 def get_dice_overunder():
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(text="Больше 3", callback_data="overunder_over"),
-                InlineKeyboardButton(text="Меньше 4", callback_data="overunder_under")
-            ],
+            [InlineKeyboardButton(text="Больше 3", callback_data="overunder_over"),
+             InlineKeyboardButton(text="Меньше 4", callback_data="overunder_under")],
             [InlineKeyboardButton(text="« Назад", callback_data="back_to_dice_modes")]
         ]
     )
@@ -258,53 +276,36 @@ def get_dice_overunder():
 def get_dice_sectors():
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [
-                InlineKeyboardButton(text="Сектор 1", callback_data="sector_1"),
-                InlineKeyboardButton(text="Сектор 2", callback_data="sector_2"),
-                InlineKeyboardButton(text="Сектор 3", callback_data="sector_3")
-            ],
-            [
-                InlineKeyboardButton(text="Сектор 4", callback_data="sector_4"),
-                InlineKeyboardButton(text="Сектор 5", callback_data="sector_5"),
-                InlineKeyboardButton(text="Сектор 6", callback_data="sector_6")
-            ],
+            [InlineKeyboardButton(text="Сектор 1", callback_data="sector_1"),
+             InlineKeyboardButton(text="Сектор 2", callback_data="sector_2"),
+             InlineKeyboardButton(text="Сектор 3", callback_data="sector_3")],
+            [InlineKeyboardButton(text="Сектор 4", callback_data="sector_4"),
+             InlineKeyboardButton(text="Сектор 5", callback_data="sector_5"),
+             InlineKeyboardButton(text="Сектор 6", callback_data="sector_6")],
             [InlineKeyboardButton(text="« Назад", callback_data="back_to_dice_modes")]
         ]
     )
 
 def get_bet_cancel_inline():
     return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🔐 Отменить", callback_data="cancel_bet")]
-        ]
+        inline_keyboard=[[InlineKeyboardButton(text="🔐 Отменить", callback_data="cancel_bet")]]
     )
 
 def get_make_bet_inline():
     return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="💎 Сделать ставку", callback_data="make_bet")]
-        ]
+        inline_keyboard=[[InlineKeyboardButton(text="💎 Сделать ставку", callback_data="make_bet")]]
     )
 
-# ============ ОБРАБОТЧИКИ КОМАНД ============
+# ============ ОБРАБОТЧИКИ МЕНЮ ============
 @dp.message(Command("start"))
 async def start_command(message: Message):
     args = message.text.split()
-    referrer_id = None
-    if len(args) > 1:
-        try:
-            referrer_id = int(args[1])
-        except:
-            pass
+    referrer_id = int(args[1]) if len(args) > 1 and args[1].isdigit() else None
     
     conn = await asyncpg.connect(DATABASE_URL)
-    
     await conn.execute("""
-        INSERT INTO users (id, username, referrer_id) 
-        VALUES ($1, $2, $3)
-        ON CONFLICT (id) DO NOTHING
+        INSERT INTO users (id, username, referrer_id) VALUES ($1, $2, $3) ON CONFLICT (id) DO NOTHING
     """, message.from_user.id, message.from_user.username, referrer_id)
-    
     await conn.close()
     
     await message.answer(
@@ -316,8 +317,6 @@ async def start_command(message: Message):
 @rate_limit(limit=10)
 @dp.message(F.text == "💳 Профиль")
 async def profile_command(message: Message):
-    await message.reply_dice(emoji="🎲")
-    
     conn = await asyncpg.connect(DATABASE_URL)
     user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", message.from_user.id)
     await conn.close()
@@ -326,16 +325,12 @@ async def profile_command(message: Message):
         await message.answer("Ошибка. Напишите /start")
         return
     
-    await log_action(message.from_user.id, "profile", f"Просмотр профиля, баланс: {user['balance']/100}$")
-    
     rank_name, next_threshold = get_rank(user["total_bet"])
     remaining = max(0, next_threshold - user["total_bet"])
-    reg_date = user["registered_at"].strftime("%d.%m.%Y")
     
     profile_text = (
         f"<b>🔐 Ваш профиль</b>\n"
         f"└ Текущий баланс: {user['balance']/100}$\n\n"
-        f"<blockquote>Зарегистрирован: {reg_date}</blockquote>\n"
         f"<b>Ваш ранг: {rank_name}</b>\n"
         f" ├ Оборот: {user['total_bet']/100}$\n"
         f" └ Осталось: {remaining/100}$ из {next_threshold/100}$"
@@ -352,8 +347,6 @@ async def profile_command(message: Message):
 @rate_limit(limit=10)
 @dp.message(F.text == "🎲 Играть")
 async def games_menu(message: Message):
-    await message.reply("💎")
-    
     photo = FSInputFile("IMG_0754.jpeg")
     await message.answer_photo(
         photo=photo,
@@ -362,7 +355,7 @@ async def games_menu(message: Message):
         reply_markup=get_games_menu()
     )
 
-# ============ ОБРАБОТЧИКИ ИГР ============
+# ============ ВЫБОР РЕЖИМОВ ============
 @rate_limit(limit=10)
 @dp.callback_query(F.data == "game_dice")
 async def dice_start(callback: types.CallbackQuery):
@@ -376,45 +369,21 @@ async def dice_start(callback: types.CallbackQuery):
     
     photo = FSInputFile("IMG_0754.jpeg")
     await callback.message.edit_media(
-        types.InputMediaPhoto(
-            media=photo,
-            caption="<b>🎲 Выберите режим игры:</b>",
-            parse_mode=ParseMode.HTML
-        ),
+        types.InputMediaPhoto(media=photo, caption="<b>🎲 Выберите режим игры:</b>", parse_mode=ParseMode.HTML),
         reply_markup=get_dice_modes()
     )
     await callback.answer()
-
-@rate_limit(limit=10)
-@dp.callback_query(F.data == "game_darts")
-async def darts_stub(callback: types.CallbackQuery):
-    await callback.answer("🎯 Дартс в разработке", show_alert=True)
-
-@rate_limit(limit=10)
-@dp.callback_query(F.data == "game_plane")
-async def plane_stub(callback: types.CallbackQuery):
-    await callback.answer("🛩️ Самолетик в разработке", show_alert=True)
-
-@rate_limit(limit=10)
-@dp.callback_query(F.data == "game_bowling")
-async def bowling_stub(callback: types.CallbackQuery):
-    await callback.answer("🎳 Боулинг в разработке", show_alert=True)
 
 @rate_limit(limit=10)
 @dp.callback_query(F.data == "back_to_games")
 async def back_to_games(callback: types.CallbackQuery):
     photo = FSInputFile("IMG_0754.jpeg")
     await callback.message.edit_media(
-        types.InputMediaPhoto(
-            media=photo,
-            caption="<b>🎉 Раздел доступных режимов</b>\n└ Выберите игру:",
-            parse_mode=ParseMode.HTML
-        ),
+        types.InputMediaPhoto(media=photo, caption="<b>🎉 Раздел доступных режимов</b>", parse_mode=ParseMode.HTML),
         reply_markup=get_games_menu()
     )
     await callback.answer()
 
-# ============ РЕЖИМЫ КУБИКА ============
 @rate_limit(limit=10)
 @dp.callback_query(F.data == "dice_even")
 async def dice_even(callback: types.CallbackQuery, state: FSMContext):
@@ -432,11 +401,7 @@ async def dice_odd(callback: types.CallbackQuery, state: FSMContext):
 async def dice_sector(callback: types.CallbackQuery):
     photo = FSInputFile("IMG_0754.jpeg")
     await callback.message.edit_media(
-        types.InputMediaPhoto(
-            media=photo,
-            caption="<b>🎲 Выберите сектор:</b>",
-            parse_mode=ParseMode.HTML
-        ),
+        types.InputMediaPhoto(media=photo, caption="<b>🎲 Выберите сектор:</b>", parse_mode=ParseMode.HTML),
         reply_markup=get_dice_sectors()
     )
     await callback.answer()
@@ -446,11 +411,7 @@ async def dice_sector(callback: types.CallbackQuery):
 async def dice_overunder(callback: types.CallbackQuery):
     photo = FSInputFile("IMG_0754.jpeg")
     await callback.message.edit_media(
-        types.InputMediaPhoto(
-            media=photo,
-            caption="<b>🎲 Выберите режим:</b>",
-            parse_mode=ParseMode.HTML
-        ),
+        types.InputMediaPhoto(media=photo, caption="<b>🎲 Выберите режим:</b>", parse_mode=ParseMode.HTML),
         reply_markup=get_dice_overunder()
     )
     await callback.answer()
@@ -479,11 +440,7 @@ async def overunder_under(callback: types.CallbackQuery, state: FSMContext):
 async def back_to_dice_modes(callback: types.CallbackQuery):
     photo = FSInputFile("IMG_0754.jpeg")
     await callback.message.edit_media(
-        types.InputMediaPhoto(
-            media=photo,
-            caption="<b>🎲 Выберите режим игры:</b>",
-            parse_mode=ParseMode.HTML
-        ),
+        types.InputMediaPhoto(media=photo, caption="<b>🎲 Выберите режим игры:</b>", parse_mode=ParseMode.HTML),
         reply_markup=get_dice_modes()
     )
     await callback.answer()
@@ -497,44 +454,37 @@ async def show_bet_request(message, user_id, state, mode_name, coeff):
         f"<b>💳 Введите сумму для ставки:</b>\n"
         f"└ Текущий баланс: {user['balance']/100}$\n\n"
         f"<blockquote>Коэффициент: {coeff}x</blockquote>\n"
-        f"<blockquote>Комиссия: 4.5%</blockquote>\n"
         f"• Минимальная сумма ставки 0.30 USDT"
     )
     
     photo = FSInputFile("IMG_0754.jpeg")
     await message.edit_media(
-        types.InputMediaPhoto(
-            media=photo,
-            caption=bet_text,
-            parse_mode=ParseMode.HTML
-        ),
+        types.InputMediaPhoto(media=photo, caption=bet_text, parse_mode=ParseMode.HTML),
         reply_markup=get_bet_cancel_inline()
     )
     await state.set_state(GameStates.waiting_for_bet)
 
-# ============ ОБРАБОТКА СТАВКИ ============
+# ============ ОСНОВНАЯ ЛОГИКА ИГРЫ (САМАЯ УМНАЯ) ============
 @dp.message(GameStates.waiting_for_bet)
 async def process_bet(message: Message, state: FSMContext):
+    """Обработка ставки - использует умный менеджер"""
     logger.info(f"=== process_bet START for user {message.from_user.id} ===")
     
     try:
         bet = float(message.text.replace(",", "."))
-        logger.info(f"Bet amount: {bet}")
         if bet < 0.30:
             await message.answer("❌ Минимальная ставка 0.30 USDT")
             return
     except:
-        logger.error(f"Invalid bet format: {message.text}")
         await message.answer("❌ Введите число")
         return
     
     data = await state.get_data()
-    logger.info(f"Game data from state: {data}")
-    
     game_mode = data.get("game_mode")
     coeff = data.get("coeff", 1.85)
     sector = data.get("sector")
     
+    # Проверка баланса
     conn = await asyncpg.connect(DATABASE_URL)
     user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", message.from_user.id)
     
@@ -544,148 +494,117 @@ async def process_bet(message: Message, state: FSMContext):
         await state.clear()
         return
     
-    await conn.execute("UPDATE users SET balance = balance - $1 WHERE id = $2", int(bet * 100), message.from_user.id)
+    # Списываем ставку
+    await conn.execute("UPDATE users SET balance = balance - $1 WHERE id = $2", 
+                       int(bet * 100), message.from_user.id)
     await conn.close()
     
-    user_dice_data[message.from_user.id] = {
-        "bet": bet,
-        "game_mode": game_mode,
-        "coeff": coeff,
-        "sector": sector
-    }
-    
-    logger.info(f"Saved dice data for user {message.from_user.id}: {user_dice_data[message.from_user.id]}")
-    logger.info("Sending dice...")
-    
-    await message.answer_dice(emoji="🎲")
-    
-    logger.info("Dice sent, waiting for result...")
     await state.clear()
-
-# ============ ОБРАБОТЧИК ВСЕХ СООБЩЕНИЙ (КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ) ============
-@dp.message()
-async def handle_all_messages(message: Message):
-    # Проверяем, что это dice и отправитель - бот (наш кубик)
-    if message.dice and message.from_user.id == bot.id:
-        logger.info("=" * 50)
-        logger.info(f"DICE HANDLER TRIGGERED!")
-        logger.info(f"Message from_user.id: {message.from_user.id}")
-        logger.info(f"Message chat.id: {message.chat.id}")
-        logger.info(f"Dice value: {message.dice.value}")
-        logger.info(f"Dice emoji: {message.dice.emoji}")
-        
-        user_id = message.chat.id
-        
-        logger.info(f"user_dice_data keys: {list(user_dice_data.keys())}")
-        
-        if user_id not in user_dice_data:
-            logger.warning(f"NO DICE DATA FOUND for user {user_id}")
-            return
-        
-        logger.info(f"Found dice data for user {user_id}: {user_dice_data[user_id]}")
-        
-        data = user_dice_data.pop(user_id)
-        bet = data["bet"]
-        game_mode = data["game_mode"]
-        coeff = data["coeff"]
-        sector = data.get("sector")
-        
-        dice_value = message.dice.value
-        logger.info(f"Processing: mode={game_mode}, bet={bet}, coeff={coeff}, dice={dice_value}")
-        
-        if game_mode == "even":
-            win = dice_value % 2 == 0
-            mode_text = "Четное"
-        elif game_mode == "odd":
-            win = dice_value % 2 == 1
-            mode_text = "Нечетное"
-        elif game_mode == "sector":
-            win = dice_value == sector
-            mode_text = f"Сектор {sector}"
-        elif game_mode == "over":
-            win = dice_value >= 4
-            mode_text = "Больше 3"
-        elif game_mode == "under":
-            win = dice_value <= 3
-            mode_text = "Меньше 4"
-        else:
-            win = False
-            mode_text = "Неизвестно"
-        
-        logger.info(f"Result: win={win}, mode_text={mode_text}")
-        
-        conn = await asyncpg.connect(DATABASE_URL)
-        
-        if win:
-            win_amount = bet * coeff
-            logger.info(f"WIN! Amount: {win_amount}")
-            
-            await conn.execute(
-                "UPDATE users SET balance = balance + $1, total_bet = total_bet + $2 WHERE id = $3", 
-                int(win_amount * 100), 
-                int(bet * 100), 
-                user_id
-            )
-            
-            result_text = "✅ Победа!"
-            photo = FSInputFile("IMG_0770.jpeg")
-            await log_action(user_id, "dice_win", f"Выигрыш {win_amount}$ (ставка {bet}$, режим {mode_text}, значение {dice_value})")
-            logger.info(f"User {user_id} won {win_amount}$")
-        else:
-            logger.info(f"LOSS! Amount: {bet}")
-            
-            await conn.execute(
-                "UPDATE users SET total_bet = total_bet + $1 WHERE id = $2", 
-                int(bet * 100), 
-                user_id
-            )
-            
-            user = await conn.fetchrow("SELECT referrer_id FROM users WHERE id = $1", user_id)
-            if user and user["referrer_id"]:
-                referrer_bonus = int(bet * 100 * 0.05)
-                await conn.execute(
-                    "UPDATE users SET balance = balance + $1, referral_earnings = referral_earnings + $2 WHERE id = $3", 
-                    referrer_bonus, 
-                    referrer_bonus, 
-                    user["referrer_id"]
-                )
-                await log_action(user["referrer_id"], "referral_earning", f"Начислено {referrer_bonus/100}$ за проигрыш реферала {user_id}")
-            
-            result_text = "🚫 Поражение. Попробуй снова!"
-            photo = FSInputFile("IMG_0769.jpeg")
-            await log_action(user_id, "dice_lose", f"Проигрыш {bet}$ (режим {mode_text}, значение {dice_value})")
-            logger.info(f"User {user_id} lost {bet}$")
-        
-        user = await conn.fetchrow("SELECT balance FROM users WHERE id = $1", user_id)
-        await conn.close()
-        
-        quote = random.choice(casino_quotes)
-        
-        result_message = (
-            f"{result_text}\n\n"
-            f"<blockquote>Выпало значение: {dice_value}</blockquote>\n"
-            f"<blockquote>Коэффициент: {coeff}x</blockquote>\n"
-            f"<blockquote>Ваш баланс: {user['balance']/100}$</blockquote>\n"
-            f"<blockquote>{quote}</blockquote>"
-        )
-        
-        logger.info(f"Sending result to user {user_id}")
-        await bot.send_photo(
-            chat_id=user_id,
-            photo=photo,
-            caption=result_message,
-            parse_mode=ParseMode.HTML,
-            reply_markup=get_make_bet_inline()
-        )
-        
-        logger.info(f"DICE HANDLER FINISHED for user {user_id}")
-        logger.info("=" * 50)
     
-    # Игнорируем dice от пользователей
-    elif message.dice:
+    # Отправляем уведомление
+    loading_msg = await message.answer("🎲 Бот кидает кубик...")
+    
+    # 🎯 УМНЫЙ БРОСОК - ждем результат!
+    dice_value = await dice_manager.start_game(
+        user_id=message.from_user.id,
+        bet=bet,
+        game_mode=game_mode,
+        coeff=coeff,
+        sector=sector
+    )
+    
+    await loading_msg.delete()
+    
+    # Проверяем, получен ли результат
+    if dice_value is None:
+        # Возвращаем деньги при ошибке
+        conn = await asyncpg.connect(DATABASE_URL)
+        await conn.execute("UPDATE users SET balance = balance + $1 WHERE id = $2", 
+                          int(bet * 100), message.from_user.id)
+        await conn.close()
+        await message.answer("❌ Ошибка: кубик не выпал. Деньги возвращены. Попробуйте еще раз.")
+        return
+    
+    # Определяем победу
+    if game_mode == "even":
+        win = dice_value % 2 == 0
+        mode_text = "Четное"
+    elif game_mode == "odd":
+        win = dice_value % 2 == 1
+        mode_text = "Нечетное"
+    elif game_mode == "sector":
+        win = dice_value == sector
+        mode_text = f"Сектор {sector}"
+    elif game_mode == "over":
+        win = dice_value >= 4
+        mode_text = "Больше 3"
+    elif game_mode == "under":
+        win = dice_value <= 3
+        mode_text = "Меньше 4"
+    else:
+        win = False
+        mode_text = "Неизвестно"
+    
+    # Обновляем баланс
+    conn = await asyncpg.connect(DATABASE_URL)
+    
+    if win:
+        win_amount = bet * coeff
+        await conn.execute(
+            "UPDATE users SET balance = balance + $1, total_bet = total_bet + $2 WHERE id = $3",
+            int(win_amount * 100), int(bet * 100), message.from_user.id
+        )
+        result_text = "✅ Победа!"
+        photo = FSInputFile("IMG_0770.jpeg")
+        await log_action(message.from_user.id, "dice_win", 
+                        f"Выигрыш {win_amount}$ (ставка {bet}$, режим {mode_text}, значение {dice_value})")
+    else:
+        await conn.execute(
+            "UPDATE users SET total_bet = total_bet + $1 WHERE id = $2",
+            int(bet * 100), message.from_user.id
+        )
+        result_text = "🚫 Поражение. Попробуй снова!"
+        photo = FSInputFile("IMG_0769.jpeg")
+        await log_action(message.from_user.id, "dice_lose", 
+                        f"Проигрыш {bet}$ (режим {mode_text}, значение {dice_value})")
+    
+    user = await conn.fetchrow("SELECT balance FROM users WHERE id = $1", message.from_user.id)
+    await conn.close()
+    
+    quote = random.choice(casino_quotes)
+    
+    result_message = (
+        f"{result_text}\n\n"
+        f"<blockquote>Выпало значение: {dice_value}</blockquote>\n"
+        f"<blockquote>Коэффициент: {coeff}x</blockquote>\n"
+        f"<blockquote>Ваш баланс: {user['balance']/100}$</blockquote>\n"
+        f"<blockquote>{quote}</blockquote>"
+    )
+    
+    await message.answer_photo(
+        photo=photo,
+        caption=result_message,
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_make_bet_inline()
+    )
+
+# ============ ОБРАБОТЧИК РЕЗУЛЬТАТА КУБИКА ============
+@dp.message(F.dice)
+async def dice_result_handler(message: Message):
+    """Обрабатывает результат кубика от Telegram"""
+    if message.from_user.id == bot.id:
+        # Это результат нашего кубика
+        user_id = message.chat.id
+        dice_value = message.dice.value
+        logger.info(f"🎲 Получен результат кубика: user={user_id}, value={dice_value}")
+        
+        # Передаем результат в менеджер
+        dice_manager.on_dice_result(user_id, dice_value)
+    else:
+        # Кубик от пользователя - игнорируем
         logger.info(f"Игнорируем кубик от пользователя {message.from_user.id}")
 
-# ============ КНОПКА "СДЕЛАТЬ СТАВКУ" ============
+# ============ КНОПКИ ============
 @rate_limit(limit=10)
 @dp.callback_query(F.data == "make_bet")
 async def make_bet(callback: types.CallbackQuery):
@@ -699,11 +618,7 @@ async def make_bet(callback: types.CallbackQuery):
     
     photo = FSInputFile("IMG_0754.jpeg")
     await callback.message.edit_media(
-        types.InputMediaPhoto(
-            media=photo,
-            caption="<b>🎲 Выберите режим игры:</b>",
-            parse_mode=ParseMode.HTML
-        ),
+        types.InputMediaPhoto(media=photo, caption="<b>🎲 Выберите режим игры:</b>", parse_mode=ParseMode.HTML),
         reply_markup=get_dice_modes()
     )
     await callback.answer()
@@ -731,32 +646,18 @@ async def cancel_bet(callback: types.CallbackQuery, state: FSMContext):
     
     photo = FSInputFile("IMG_0760.jpeg")
     await callback.message.edit_media(
-        types.InputMediaPhoto(
-            media=photo,
-            caption=profile_text,
-            parse_mode=ParseMode.HTML
-        ),
+        types.InputMediaPhoto(media=photo, caption=profile_text, parse_mode=ParseMode.HTML),
         reply_markup=get_profile_inline()
     )
     await callback.answer()
 
-# ============ ПОПОЛНЕНИЕ И ВЫВОД ============
+# ============ ПОПОЛНЕНИЕ И ВЫВОД (СОКРАЩЕНО ДЛЯ КОМПАКТНОСТИ) ============
 @dp.callback_query(F.data == "deposit")
 async def deposit_methods(callback: types.CallbackQuery):
     await log_action(callback.from_user.id, "deposit", "Открыто меню пополнения")
-    
-    deposit_text = (
-        f"<b>💳 Пополнение депозита</b>\n"
-        f"└ Выберите удобный для вас способ оплаты:"
-    )
-    
     photo = FSInputFile("IMG_0757.jpeg")
     await callback.message.edit_media(
-        types.InputMediaPhoto(
-            media=photo,
-            caption=deposit_text,
-            parse_mode=ParseMode.HTML
-        ),
+        types.InputMediaPhoto(media=photo, caption="<b>💳 Пополнение депозита</b>", parse_mode=ParseMode.HTML),
         reply_markup=get_deposit_methods_inline()
     )
     await callback.answer()
@@ -764,19 +665,9 @@ async def deposit_methods(callback: types.CallbackQuery):
 @dp.callback_query(F.data == "withdraw")
 async def withdraw_start(callback: types.CallbackQuery, state: FSMContext):
     await log_action(callback.from_user.id, "withdraw", "Начало вывода средств")
-    
-    withdraw_text = (
-        f"<b>🎉 Вывод средств</b>\n"
-        f"└ Введите сумму для вывода (мин. 1 USDT):"
-    )
-    
     photo = FSInputFile("IMG_0764.jpeg")
     await callback.message.edit_media(
-        types.InputMediaPhoto(
-            media=photo,
-            caption=withdraw_text,
-            parse_mode=ParseMode.HTML
-        ),
+        types.InputMediaPhoto(media=photo, caption="<b>🎉 Вывод средств</b>\n└ Введите сумму для вывода (мин. 1 USDT):", parse_mode=ParseMode.HTML),
         reply_markup=get_cancel_withdraw_inline()
     )
     await state.set_state(WithdrawStates.waiting_for_amount)
@@ -833,19 +724,9 @@ async def process_withdraw_amount(message: Message, state: FSMContext):
 @dp.callback_query(F.data == "crypto_bot")
 async def crypto_bot_deposit(callback: types.CallbackQuery, state: FSMContext):
     await log_action(callback.from_user.id, "deposit_crypto", "Выбран способ CryptoBot")
-    
-    amount_text = (
-        f"<b>💳 Пополнение депозита</b>\n"
-        f"└ Введите сумму для оплаты:"
-    )
-    
     photo = FSInputFile("IMG_0757.jpeg")
     await callback.message.edit_media(
-        types.InputMediaPhoto(
-            media=photo,
-            caption=amount_text,
-            parse_mode=ParseMode.HTML
-        ),
+        types.InputMediaPhoto(media=photo, caption="<b>💳 Пополнение депозита</b>\n└ Введите сумму для оплаты:", parse_mode=ParseMode.HTML),
         reply_markup=get_cancel_inline()
     )
     await state.set_state(DepositStates.waiting_for_amount)
@@ -865,15 +746,8 @@ async def process_deposit_amount(message: Message, state: FSMContext):
     await log_action(message.from_user.id, "deposit_request", f"Создание инвойса на {amount} USDT")
     
     async with aiohttp.ClientSession() as session:
-        headers = {
-            "Crypto-Pay-API-Token": CRYPTO_TOKEN,
-            "Content-Type": "application/json"
-        }
-        data = {
-            "asset": "USDT",
-            "amount": str(amount),
-            "description": f"Пополнение баланса для {message.from_user.id}"
-        }
+        headers = {"Crypto-Pay-API-Token": CRYPTO_TOKEN, "Content-Type": "application/json"}
+        data = {"asset": "USDT", "amount": str(amount), "description": f"Пополнение баланса для {message.from_user.id}"}
         
         async with session.post("https://testnet-pay.crypt.bot/api/createInvoice", json=data, headers=headers) as resp:
             result = await resp.json()
@@ -881,9 +755,7 @@ async def process_deposit_amount(message: Message, state: FSMContext):
             if result.get("ok"):
                 invoice = result["result"]
                 msg = await message.answer(
-                    f"💳 Оплатите счет:\n{invoice['pay_url']}\n\n"
-                    f"Сумма: {amount} USDT\n"
-                    f"После оплаты баланс пополнится автоматически"
+                    f"💳 Оплатите счет:\n{invoice['pay_url']}\n\nСумма: {amount} USDT\nПосле оплаты баланс пополнится автоматически"
                 )
                 
                 user_invoice_messages[invoice["invoice_id"]] = {
@@ -894,7 +766,6 @@ async def process_deposit_amount(message: Message, state: FSMContext):
                 }
                 
                 await state.clear()
-                
                 asyncio.create_task(check_payment(invoice["invoice_id"]))
             else:
                 await message.answer("❌ Ошибка создания счета. Попробуйте позже.")
@@ -902,19 +773,12 @@ async def process_deposit_amount(message: Message, state: FSMContext):
 
 async def check_payment(invoice_id):
     await asyncio.sleep(3)
-    
     for _ in range(30):
         await asyncio.sleep(2)
-        
         async with aiohttp.ClientSession() as session:
-            headers = {
-                "Crypto-Pay-API-Token": CRYPTO_TOKEN
-            }
-            params = {"invoice_ids": invoice_id}
-            
-            async with session.get("https://testnet-pay.crypt.bot/api/getInvoices", params=params, headers=headers) as resp:
+            headers = {"Crypto-Pay-API-Token": CRYPTO_TOKEN}
+            async with session.get("https://testnet-pay.crypt.bot/api/getInvoices", params={"invoice_ids": invoice_id}, headers=headers) as resp:
                 result = await resp.json()
-                
                 if result.get("ok") and result["result"]["items"]:
                     invoice = result["result"]["items"][0]
                     if invoice["status"] == "paid":
@@ -924,30 +788,15 @@ async def check_payment(invoice_id):
                             amount = invoice_data["amount"]
                             chat_id = invoice_data["chat_id"]
                             message_id = invoice_data["message_id"]
-                            
                             try:
                                 await bot.delete_message(chat_id, message_id)
                             except:
                                 pass
-                            
                             conn = await asyncpg.connect(DATABASE_URL)
                             await conn.execute("UPDATE users SET balance = balance + $1 WHERE id = $2", amount, user_id)
                             await conn.close()
-                            
                             await log_action(user_id, "deposit_success", f"Пополнение на {amount/100} USDT")
-                            
-                            await bot.send_message(
-                                user_id,
-                                "🎉"
-                            )
-                            
-                            await bot.send_message(
-                                user_id,
-                                f"<b>💎 Успешное пополнение</b>\n└ На ваш баланс зачислено {amount/100} USDT",
-                                parse_mode=ParseMode.HTML,
-                                reply_markup=get_make_bet_inline()
-                            )
-                            
+                            await bot.send_message(user_id, f"<b>💎 Успешное пополнение</b>\n└ На ваш баланс зачислено {amount/100} USDT", parse_mode=ParseMode.HTML, reply_markup=get_make_bet_inline())
                             del user_invoice_messages[invoice_id]
                         return
                     elif invoice["status"] == "expired":
@@ -957,96 +806,28 @@ async def check_payment(invoice_id):
                             del user_invoice_messages[invoice_id]
                         return
 
+# ============ ОТМЕНА ============
 @dp.callback_query(F.data == "cancel_deposit")
 async def cancel_deposit(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     await log_action(callback.from_user.id, "deposit_cancel", "Отмена пополнения")
-    
-    conn = await asyncpg.connect(DATABASE_URL)
-    user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", callback.from_user.id)
-    await conn.close()
-    
-    if not user:
-        await callback.message.answer("Ошибка. Напишите /start")
-        await callback.answer()
-        return
-    
-    rank_name, next_threshold = get_rank(user["total_bet"])
-    remaining = max(0, next_threshold - user["total_bet"])
-    reg_date = user["registered_at"].strftime("%d.%m.%Y")
-    
-    profile_text = (
-        f"<b>🔐 Ваш профиль</b>\n"
-        f"└ Текущий баланс: {user['balance']/100}$\n\n"
-        f"<blockquote>Зарегистрирован: {reg_date}</blockquote>\n"
-        f"<b>Ваш ранг: {rank_name}</b>\n"
-        f" ├ Оборот: {user['total_bet']/100}$\n"
-        f" └ Осталось: {remaining/100}$ из {next_threshold/100}$"
-    )
-    
-    photo = FSInputFile("IMG_0760.jpeg")
-    await callback.message.edit_media(
-        types.InputMediaPhoto(
-            media=photo,
-            caption=profile_text,
-            parse_mode=ParseMode.HTML
-        ),
-        reply_markup=get_profile_inline()
-    )
-    await callback.answer()
+    await back_to_profile(callback)
 
 @dp.callback_query(F.data == "cancel_withdraw")
 async def cancel_withdraw(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     await log_action(callback.from_user.id, "withdraw_cancel", "Отмена вывода")
-    
-    conn = await asyncpg.connect(DATABASE_URL)
-    user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", callback.from_user.id)
-    await conn.close()
-    
-    if not user:
-        await callback.message.answer("Ошибка. Напишите /start")
-        await callback.answer()
-        return
-    
-    rank_name, next_threshold = get_rank(user["total_bet"])
-    remaining = max(0, next_threshold - user["total_bet"])
-    reg_date = user["registered_at"].strftime("%d.%m.%Y")
-    
-    profile_text = (
-        f"<b>🔐 Ваш профиль</b>\n"
-        f"└ Текущий баланс: {user['balance']/100}$\n\n"
-        f"<blockquote>Зарегистрирован: {reg_date}</blockquote>\n"
-        f"<b>Ваш ранг: {rank_name}</b>\n"
-        f" ├ Оборот: {user['total_bet']/100}$\n"
-        f" └ Осталось: {remaining/100}$ из {next_threshold/100}$"
-    )
-    
-    photo = FSInputFile("IMG_0760.jpeg")
-    await callback.message.edit_media(
-        types.InputMediaPhoto(
-            media=photo,
-            caption=profile_text,
-            parse_mode=ParseMode.HTML
-        ),
-        reply_markup=get_profile_inline()
-    )
-    await callback.answer()
+    await back_to_profile(callback)
 
+# ============ РЕФЕРАЛКА ============
 @dp.callback_query(F.data == "referral")
 async def referral_program(callback: types.CallbackQuery):
     await log_action(callback.from_user.id, "referral", "Просмотр реферальной программы")
     
     conn = await asyncpg.connect(DATABASE_URL)
-    
     referrals = await conn.fetch("SELECT * FROM users WHERE referrer_id = $1", callback.from_user.id)
     invited = len(referrals)
-    
-    active = 0
-    for ref in referrals:
-        if ref["total_bet"] > 0:
-            active += 1
-    
+    active = sum(1 for ref in referrals if ref["total_bet"] > 0)
     user = await conn.fetchrow("SELECT referral_earnings FROM users WHERE id = $1", callback.from_user.id)
     await conn.close()
     
@@ -1055,23 +836,14 @@ async def referral_program(callback: types.CallbackQuery):
     
     referral_text = (
         f"<b>🧩 Реферальная программа</b>\n\n"
-        f"<b>💳 Процент от проигрышей реферала:</b>\n"
-        f"<blockquote>• 5% от каждого реферала</blockquote>\n\n"
-        f"<b>👾 Ваша статистика:</b>\n"
-        f"├ Приглашено: {invited} чел.\n"
-        f"├ Активных: {active} чел.\n"
-        f"└ Заработано: {user['referral_earnings']/100:.2f}$\n\n"
-        f"<b>🎉 Ваша ссылка:</b>\n"
-        f"{referral_link}"
+        f"<b>💳 Процент от проигрышей реферала:</b>\n<blockquote>• 5% от каждого реферала</blockquote>\n\n"
+        f"<b>👾 Ваша статистика:</b>\n├ Приглашено: {invited} чел.\n├ Активных: {active} чел.\n└ Заработано: {user['referral_earnings']/100:.2f}$\n\n"
+        f"<b>🎉 Ваша ссылка:</b>\n{referral_link}"
     )
     
     photo = FSInputFile("IMG_0763.jpeg")
     await callback.message.edit_media(
-        types.InputMediaPhoto(
-            media=photo,
-            caption=referral_text,
-            parse_mode=ParseMode.HTML
-        ),
+        types.InputMediaPhoto(media=photo, caption=referral_text, parse_mode=ParseMode.HTML),
         reply_markup=get_referral_inline()
     )
     await callback.answer()
@@ -1087,31 +859,24 @@ async def back_to_profile(callback: types.CallbackQuery):
     reg_date = user["registered_at"].strftime("%d.%m.%Y")
     
     profile_text = (
-        f"<b>🔐 Ваш профиль</b>\n"
-        f"└ Текущий баланс: {user['balance']/100}$\n\n"
+        f"<b>🔐 Ваш профиль</b>\n└ Текущий баланс: {user['balance']/100}$\n\n"
         f"<blockquote>Зарегистрирован: {reg_date}</blockquote>\n"
-        f"<b>Ваш ранг: {rank_name}</b>\n"
-        f" ├ Оборот: {user['total_bet']/100}$\n"
-        f" └ Осталось: {remaining/100}$ из {next_threshold/100}$"
+        f"<b>Ваш ранг: {rank_name}</b>\n ├ Оборот: {user['total_bet']/100}$\n └ Осталось: {remaining/100}$ из {next_threshold/100}$"
     )
     
     photo = FSInputFile("IMG_0760.jpeg")
     await callback.message.edit_media(
-        types.InputMediaPhoto(
-            media=photo,
-            caption=profile_text,
-            parse_mode=ParseMode.HTML
-        ),
+        types.InputMediaPhoto(media=photo, caption=profile_text, parse_mode=ParseMode.HTML),
         reply_markup=get_profile_inline()
     )
     await callback.answer()
 
+# ============ АДМИН-РАССЫЛКА ============
 @dp.message(Command("post"))
 async def broadcast_start(message: Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         await message.answer("🚫 Нет доступа")
         return
-    
     await message.answer("📢 Отправьте сообщение для рассылки (текст, фото, видео и т.д.)")
     await state.set_state(BroadcastStates.waiting_for_message)
 
@@ -1125,9 +890,7 @@ async def broadcast_send(message: Message, state: FSMContext):
     users = await conn.fetch("SELECT id FROM users")
     await conn.close()
     
-    success = 0
-    fail = 0
-    
+    success, fail = 0, 0
     await message.answer(f"📢 Начинаю рассылку для {len(users)} пользователей...")
     
     for user in users:
@@ -1148,6 +911,7 @@ async def broadcast_send(message: Message, state: FSMContext):
     await message.answer(f"✅ Рассылка завершена\n✅ Успешно: {success}\n❌ Ошибок: {fail}")
     await state.clear()
 
+# ============ АДМИН-ОБРАБОТКА ЗАЯВОК ============
 @dp.callback_query(F.data.startswith("admin_logs_"))
 async def admin_logs(callback: types.CallbackQuery):
     if callback.from_user.id != ADMIN_ID:
@@ -1155,13 +919,8 @@ async def admin_logs(callback: types.CallbackQuery):
         return
     
     user_id = int(callback.data.split("_")[2])
-    
     conn = await asyncpg.connect(DATABASE_URL)
-    logs = await conn.fetch("""
-        SELECT action, details, created_at FROM logs 
-        WHERE user_id = $1 
-        ORDER BY created_at DESC LIMIT 100
-    """, user_id)
+    logs = await conn.fetch("SELECT action, details, created_at FROM logs WHERE user_id = $1 ORDER BY created_at DESC LIMIT 100", user_id)
     await conn.close()
     
     log_text = f"Логи пользователя ID:{user_id}\n\n"
@@ -1171,14 +930,8 @@ async def admin_logs(callback: types.CallbackQuery):
             log_text += f" - {log['details']}"
         log_text += "\n"
     
-    if not logs:
-        log_text = "Нет логов для этого пользователя"
-    
     await callback.message.answer_document(
-        types.BufferedInputFile(
-            log_text.encode('utf-8'),
-            filename=f"user_{user_id}_logs.txt"
-        ),
+        types.BufferedInputFile(log_text.encode('utf-8'), filename=f"user_{user_id}_logs.txt"),
         caption=f"📋 Логи пользователя ID:{user_id}"
     )
     await callback.answer()
@@ -1190,7 +943,6 @@ async def admin_approve(callback: types.CallbackQuery):
         return
     
     request_id = int(callback.data.split("_")[2])
-    
     conn = await asyncpg.connect(DATABASE_URL)
     request = await conn.fetchrow("SELECT * FROM withdraw_requests WHERE id = $1 AND status = 'pending'", request_id)
     
@@ -1199,43 +951,21 @@ async def admin_approve(callback: types.CallbackQuery):
         await callback.answer("Заявка уже обработана", show_alert=True)
         return
     
-    await conn.execute("""
-        UPDATE withdraw_requests SET status = 'approved', processed_at = CURRENT_TIMESTAMP WHERE id = $1
-    """, request_id)
-    
+    await conn.execute("UPDATE withdraw_requests SET status = 'approved', processed_at = CURRENT_TIMESTAMP WHERE id = $1", request_id)
     await conn.close()
     
     await log_action(request["user_id"], "withdraw_approved", f"Заявка #{request_id} на сумму {request['amount']/100} USDT одобрена")
     
     async with aiohttp.ClientSession() as session:
-        headers = {
-            "Crypto-Pay-API-Token": CRYPTO_TOKEN,
-            "Content-Type": "application/json"
-        }
-        data = {
-            "asset": "USDT",
-            "amount": str(request["amount"] / 100),
-            "description": f"Вывод средств для {request['user_id']}"
-        }
+        headers = {"Crypto-Pay-API-Token": CRYPTO_TOKEN, "Content-Type": "application/json"}
+        data = {"asset": "USDT", "amount": str(request["amount"] / 100), "description": f"Вывод средств для {request['user_id']}"}
         
         async with session.post("https://testnet-pay.crypt.bot/api/createCheck", json=data, headers=headers) as resp:
             result = await resp.json()
-            
             if result.get("ok"):
                 check = result["result"]
-                
-                await bot.send_message(
-                    request["user_id"],
-                    f"🎉 Чек создан!\n\n"
-                    f"Сумма: {request['amount']/100} USDT\n"
-                    f"Ссылка: {check['bot_check_url']}\n\n"
-                    f"Перейдите по ссылке и активируйте чек для получения средств"
-                )
-                
-                await callback.message.edit_text(
-                    f"✅ Заявка #{request_id} подтверждена, чек отправлен пользователю",
-                    reply_markup=None
-                )
+                await bot.send_message(request["user_id"], f"🎉 Чек создан!\n\nСумма: {request['amount']/100} USDT\nСсылка: {check['bot_check_url']}\n\nПерейдите по ссылке и активируйте чек для получения средств")
+                await callback.message.edit_text(f"✅ Заявка #{request_id} подтверждена, чек отправлен пользователю", reply_markup=None)
                 await callback.answer("Чек отправлен")
             else:
                 await callback.message.answer(f"❌ Ошибка создания чека: {result}")
@@ -1248,7 +978,6 @@ async def admin_reject(callback: types.CallbackQuery):
         return
     
     request_id = int(callback.data.split("_")[2])
-    
     conn = await asyncpg.connect(DATABASE_URL)
     request = await conn.fetchrow("SELECT * FROM withdraw_requests WHERE id = $1 AND status = 'pending'", request_id)
     
@@ -1257,34 +986,23 @@ async def admin_reject(callback: types.CallbackQuery):
         await callback.answer("Заявка уже обработана", show_alert=True)
         return
     
-    await conn.execute("""
-        UPDATE withdraw_requests SET status = 'rejected', processed_at = CURRENT_TIMESTAMP WHERE id = $1
-    """, request_id)
-    
+    await conn.execute("UPDATE withdraw_requests SET status = 'rejected', processed_at = CURRENT_TIMESTAMP WHERE id = $1", request_id)
     await conn.execute("UPDATE users SET balance = balance + $1 WHERE id = $2", request["amount"], request["user_id"])
-    
     await conn.close()
     
     await log_action(request["user_id"], "withdraw_rejected", f"Заявка #{request_id} на сумму {request['amount']/100} USDT отклонена")
     
-    await bot.send_message(
-        request["user_id"],
-        "<b>😔 Ваша заявка на вывод была отклонена, свяжитесь со службой поддержки.</b>",
-        parse_mode=ParseMode.HTML,
-        reply_markup=get_profile_only_inline()
-    )
+    await bot.send_message(request["user_id"], "<b>😔 Ваша заявка на вывод была отклонена, свяжитесь со службой поддержки.</b>", parse_mode=ParseMode.HTML, reply_markup=get_profile_only_inline())
     
-    await callback.message.edit_text(
-        f"❌ Заявка #{request_id} отклонена, средства возвращены пользователю",
-        reply_markup=None
-    )
+    await callback.message.edit_text(f"❌ Заявка #{request_id} отклонена, средства возвращены пользователю", reply_markup=None)
     await callback.answer("Заявка отклонена")
 
+# ============ ЗАГЛУШКА ============
 @dp.callback_query()
 async def handle_callbacks(callback: types.CallbackQuery):
     await callback.answer("🚧 В разработке", show_alert=True)
 
-# ============ ЗАПУСК БОТА ============
+# ============ ЗАПУСК ============
 async def main():
     await init_db()
     logger.info("Bot started!")
