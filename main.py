@@ -8,7 +8,7 @@ from io import StringIO
 from collections import defaultdict
 import time
 
-from aiogram.filters import ContentTypeFilter
+from aiogram.enums import ParseMode, ContentType
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
@@ -546,7 +546,11 @@ async def process_bet(message: Message, state: FSMContext):
 
 from aiogram.filters import ContentTypeFilter
 
-@dp.message(ContentTypeFilter(types.ContentType.DICE))
+from aiogram.enums import ContentType
+
+# Замените обработчик @dp.message(F.dice) на:
+
+@dp.message(F.content_type == ContentType.DICE)
 async def handle_dice(message: Message):
     user_id = message.from_user.id
     logging.info(f"Dice received from {user_id}, value: {message.dice.value}")
@@ -564,6 +568,7 @@ async def handle_dice(message: Message):
     
     dice_value = message.dice.value
     
+    # Определяем победу в зависимости от режима
     if game_mode == "even":
         win = dice_value % 2 == 0
         mode_text = "Четное"
@@ -583,6 +588,8 @@ async def handle_dice(message: Message):
         win = False
         mode_text = "Неизвестно"
     
+    logging.info(f"Game mode: {game_mode}, Win: {win}, Dice value: {dice_value}")
+    
     if win:
         win_amount = bet * coeff
         conn = await asyncpg.connect(DATABASE_URL)
@@ -593,9 +600,21 @@ async def handle_dice(message: Message):
         result_text = "✅ Победа!"
         photo = FSInputFile("IMG_0770.jpeg")
         await log_action(user_id, "dice_win", f"Выигрыш {win_amount}$ (ставка {bet}$, режим {mode_text}, значение {dice_value})")
+        
+        # Добавляем реферальные отчисления (5% от проигрыша реферала)
+        # При выигрыше реферальные отчисления не начисляются
     else:
         conn = await asyncpg.connect(DATABASE_URL)
         await conn.execute("UPDATE users SET total_bet = total_bet + $1 WHERE id = $2", int(bet * 100), user_id)
+        
+        # Начисляем реферальные отчисления (5% от суммы ставки)
+        user = await conn.fetchrow("SELECT referrer_id FROM users WHERE id = $1", user_id)
+        if user and user["referrer_id"]:
+            referrer_bonus = int(bet * 100 * 0.05)  # 5% от ставки
+            await conn.execute("UPDATE users SET balance = balance + $1, referral_earnings = referral_earnings + $2 WHERE id = $3", 
+                              referrer_bonus, referrer_bonus, user["referrer_id"])
+            await log_action(user["referrer_id"], "referral_earning", f"Начислено {referrer_bonus/100}$ за проигрыш реферала {user_id}")
+        
         await conn.close()
         
         result_text = "🚫 Поражение. Попробуй снова!"
@@ -604,10 +623,17 @@ async def handle_dice(message: Message):
     
     quote = random.choice(casino_quotes)
     
+    # Получаем обновленный баланс
+    conn = await asyncpg.connect(DATABASE_URL)
+    user = await conn.fetchrow("SELECT balance FROM users WHERE id = $1", user_id)
+    await conn.close()
+    
     result_message = (
         f"{result_text}\n\n"
         f"<blockquote>Выпало значение: {dice_value}</blockquote>\n"
+        f"<blockquote>Ваша ставка: {bet}$</blockquote>\n"
         f"<blockquote>Коэффициент: {coeff}x</blockquote>\n"
+        f"<blockquote>Ваш баланс: {user['balance']/100}$</blockquote>\n"
         f"<blockquote>{quote}</blockquote>"
     )
     
@@ -617,8 +643,10 @@ async def handle_dice(message: Message):
         parse_mode=ParseMode.HTML,
         reply_markup=get_make_bet_inline()
     )
+    
+    # Очищаем состояние
     await state.clear()
-
+    
 @rate_limit(limit=10)
 @dp.callback_query(F.data == "make_bet")
 async def make_bet(callback: types.CallbackQuery):
