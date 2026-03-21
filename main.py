@@ -77,10 +77,6 @@ class WithdrawStates(StatesGroup):
 class BroadcastStates(StatesGroup):
     waiting_for_message = State()
 
-class DiceStates(StatesGroup):
-    waiting_for_bet = State()
-    waiting_for_sector = State()
-
 class GameStates(StatesGroup):
     waiting_for_bet = State()
 
@@ -184,13 +180,6 @@ def get_cancel_withdraw_inline():
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(text="🔐 Отменить", callback_data="cancel_withdraw")]
-        ]
-    )
-
-def get_play_inline():
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text="🎲 Сделать ставку", callback_data="play_stub")]
         ]
     )
 
@@ -332,11 +321,11 @@ async def profile_command(message: Message):
     
     profile_text = (
         f"<b>🔐 Ваш профиль</b>\n"
-        f"└ Текущий баланс: {user['balance']}$\n\n"
+        f"└ Текущий баланс: {user['balance']/100}$\n\n"
         f"<blockquote>Зарегистрирован: {reg_date}</blockquote>\n"
         f"<b>Ваш ранг: {rank_name}</b>\n"
-        f" ├ Оборот: {user['total_bet']}$\n"
-        f" └ Осталось: {remaining}$ из {next_threshold}$"
+        f" ├ Оборот: {user['total_bet']/100}$\n"
+        f" └ Осталось: {remaining/100}$ из {next_threshold/100}$"
     )
     
     photo = FSInputFile("IMG_0760.jpeg")
@@ -436,8 +425,8 @@ async def dice_overunder(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("sector_"))
 async def sector_selected(callback: types.CallbackQuery, state: FSMContext):
     sector_num = int(callback.data.split("_")[1])
-    await state.update_data(game_mode="sector", sector=sector_num, coeff=2.0)
-    await show_bet_request(callback.message, callback.from_user.id, state, f"Сектор {sector_num}", 2.0)
+    await state.update_data(game_mode="sector", sector=sector_num, coeff=5.0)
+    await show_bet_request(callback.message, callback.from_user.id, state, f"Сектор {sector_num}", 5.0)
 
 @rate_limit(limit=10)
 @dp.callback_query(F.data == "overunder_over")
@@ -468,7 +457,7 @@ async def show_bet_request(message, user_id, state, mode_name, coeff):
     
     bet_text = (
         f"<b>💳 Введите сумму для ставки:</b>\n"
-        f"└ Текущий баланс: {user['balance']}$\n\n"
+        f"└ Текущий баланс: {user['balance']/100}$\n\n"
         f"<blockquote>Коэффициент: {coeff}x</blockquote>\n"
         f"<blockquote>Комиссия: 4.5%</blockquote>\n"
         f"• Минимальная сумма ставки 0.30 USDT"
@@ -500,7 +489,7 @@ async def process_bet(message: Message, state: FSMContext):
     conn = await asyncpg.connect(DATABASE_URL)
     user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", message.from_user.id)
     
-    if user["balance"] < bet:
+    if user["balance"] < int(bet * 100):
         await conn.close()
         await message.answer("❌ Недостаточно средств")
         await state.clear()
@@ -601,11 +590,11 @@ async def cancel_bet(callback: types.CallbackQuery, state: FSMContext):
     
     profile_text = (
         f"<b>🔐 Ваш профиль</b>\n"
-        f"└ Текущий баланс: {user['balance']}$\n\n"
+        f"└ Текущий баланс: {user['balance']/100}$\n\n"
         f"<blockquote>Зарегистрирован: {reg_date}</blockquote>\n"
         f"<b>Ваш ранг: {rank_name}</b>\n"
-        f" ├ Оборот: {user['total_bet']}$\n"
-        f" └ Осталось: {remaining}$ из {next_threshold}$"
+        f" ├ Оборот: {user['total_bet']/100}$\n"
+        f" └ Осталось: {remaining/100}$ из {next_threshold/100}$"
     )
     
     photo = FSInputFile("IMG_0760.jpeg")
@@ -674,7 +663,7 @@ async def process_withdraw_amount(message: Message, state: FSMContext):
     conn = await asyncpg.connect(DATABASE_URL)
     user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", message.from_user.id)
     
-    if not user or user["balance"] < amount:
+    if not user or user["balance"] < int(amount * 100):
         await conn.close()
         await message.answer("❌ Недостаточно средств")
         await state.clear()
@@ -955,7 +944,7 @@ async def check_payment(invoice_id):
                                 user_id,
                                 f"<b>💎 Успешное пополнение</b>\n└ На ваш баланс зачислено {amount/100} USDT",
                                 parse_mode=ParseMode.HTML,
-                                reply_markup=get_play_inline()
+                                reply_markup=get_make_bet_inline()
                             )
                             
                             del user_invoice_messages[invoice_id]
@@ -987,11 +976,11 @@ async def cancel_deposit(callback: types.CallbackQuery, state: FSMContext):
     
     profile_text = (
         f"<b>🔐 Ваш профиль</b>\n"
-        f"└ Текущий баланс: {user['balance']}$\n\n"
+        f"└ Текущий баланс: {user['balance']/100}$\n\n"
         f"<blockquote>Зарегистрирован: {reg_date}</blockquote>\n"
         f"<b>Ваш ранг: {rank_name}</b>\n"
-        f" ├ Оборот: {user['total_bet']}$\n"
-        f" └ Осталось: {remaining}$ из {next_threshold}$"
+        f" ├ Оборот: {user['total_bet']/100}$\n"
+        f" └ Осталось: {remaining/100}$ из {next_threshold/100}$"
     )
     
     photo = FSInputFile("IMG_0760.jpeg")
@@ -1025,11 +1014,11 @@ async def cancel_withdraw(callback: types.CallbackQuery, state: FSMContext):
     
     profile_text = (
         f"<b>🔐 Ваш профиль</b>\n"
-        f"└ Текущий баланс: {user['balance']}$\n\n"
+        f"└ Текущий баланс: {user['balance']/100}$\n\n"
         f"<blockquote>Зарегистрирован: {reg_date}</blockquote>\n"
         f"<b>Ваш ранг: {rank_name}</b>\n"
-        f" ├ Оборот: {user['total_bet']}$\n"
-        f" └ Осталось: {remaining}$ из {next_threshold}$"
+        f" ├ Оборот: {user['total_bet']/100}$\n"
+        f" └ Осталось: {remaining/100}$ из {next_threshold/100}$"
     )
     
     photo = FSInputFile("IMG_0760.jpeg")
@@ -1070,7 +1059,7 @@ async def referral_program(callback: types.CallbackQuery):
         f"<b>👾 Ваша статистика:</b>\n"
         f"├ Приглашено: {invited} чел.\n"
         f"├ Активных: {active} чел.\n"
-        f"└ Заработано: {user['referral_earnings']:.2f}$\n\n"
+        f"└ Заработано: {user['referral_earnings']/100:.2f}$\n\n"
         f"<b>🎉 Ваша ссылка:</b>\n"
         f"{referral_link}"
     )
@@ -1098,11 +1087,11 @@ async def back_to_profile(callback: types.CallbackQuery):
     
     profile_text = (
         f"<b>🔐 Ваш профиль</b>\n"
-        f"└ Текущий баланс: {user['balance']}$\n\n"
+        f"└ Текущий баланс: {user['balance']/100}$\n\n"
         f"<blockquote>Зарегистрирован: {reg_date}</blockquote>\n"
         f"<b>Ваш ранг: {rank_name}</b>\n"
-        f" ├ Оборот: {user['total_bet']}$\n"
-        f" └ Осталось: {remaining}$ из {next_threshold}$"
+        f" ├ Оборот: {user['total_bet']/100}$\n"
+        f" └ Осталось: {remaining/100}$ из {next_threshold/100}$"
     )
     
     photo = FSInputFile("IMG_0760.jpeg")
