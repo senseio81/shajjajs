@@ -1732,6 +1732,176 @@ async def broadcast_send(message: Message, state: FSMContext):
     await message.answer(f"✅ Рассылка завершена\n✅ Успешно: {success}\n❌ Ошибок: {fail}")
     await state.clear()
 
+# ==================== ТОП ИГРОКОВ (АДМИН) ====================
+
+@dp.message(Command("top"))
+async def top_all_time(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    conn = await asyncpg.connect(DATABASE_URL)
+    
+    query = """
+        SELECT user_id, SUM(amount) as total 
+        FROM withdraw_requests 
+        WHERE status = 'approved'
+        GROUP BY user_id 
+        ORDER BY total DESC 
+        LIMIT 10
+    """
+    
+    turnover = await conn.fetchval("SELECT SUM(amount) FROM withdraw_requests WHERE status = 'approved'") or 0
+    
+    top_users = await conn.fetch(query)
+    await conn.close()
+    
+    medals = ["🥇", "🥈", "🥉", "🏅", "🏅", "🏅", "🏅", "🏅", "🏅", "🏅"]
+    
+    top_text = f"<b>🤑 Топ игроков всё время:</b>\n\n"
+    
+    for i, user in enumerate(top_users):
+        user_id = user["user_id"]
+        total = user["total"] / 100
+        
+        conn = await asyncpg.connect(DATABASE_URL)
+        username = await conn.fetchval("SELECT username FROM users WHERE id = $1", user_id)
+        await conn.close()
+        
+        display_name = username if username else f"ID:{user_id}"
+        medal = medals[i] if i < len(medals) else "🏅"
+        
+        top_text += f"{medal} <b><a href=\"https://t.me/Hot_dicebot?start=user_{user_id}\">{display_name}</a></b> - <b>{total:.2f}$</b>\n"
+    
+    top_text += f"\n<b>💸 Оборот всё время: {turnover/100:.2f}$</b>"
+    
+    await message.answer(top_text, parse_mode=ParseMode.HTML)
+
+@dp.message(Command("topd"))
+async def top_day(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    conn = await asyncpg.connect(DATABASE_URL)
+    
+    query = """
+        SELECT user_id, SUM(amount) as total 
+        FROM withdraw_requests 
+        WHERE status = 'approved' AND processed_at >= CURRENT_DATE
+        GROUP BY user_id 
+        ORDER BY total DESC 
+        LIMIT 10
+    """
+    
+    turnover = await conn.fetchval("SELECT SUM(amount) FROM withdraw_requests WHERE status = 'approved' AND processed_at >= CURRENT_DATE") or 0
+    
+    top_users = await conn.fetch(query)
+    await conn.close()
+    
+    medals = ["🥇", "🥈", "🥉", "🏅", "🏅", "🏅", "🏅", "🏅", "🏅", "🏅"]
+    
+    top_text = f"<b>🤑 Топ игроков сегодня:</b>\n\n"
+    
+    for i, user in enumerate(top_users):
+        user_id = user["user_id"]
+        total = user["total"] / 100
+        
+        conn = await asyncpg.connect(DATABASE_URL)
+        username = await conn.fetchval("SELECT username FROM users WHERE id = $1", user_id)
+        await conn.close()
+        
+        display_name = username if username else f"ID:{user_id}"
+        medal = medals[i] if i < len(medals) else "🏅"
+        
+        top_text += f"{medal} <b><a href=\"https://t.me/Hot_dicebot?start=user_{user_id}\">{display_name}</a></b> - <b>{total:.2f}$</b>\n"
+    
+    top_text += f"\n<b>💸 Оборот сегодня: {turnover/100:.2f}$</b>"
+    
+    await message.answer(top_text, parse_mode=ParseMode.HTML)
+
+@dp.message(Command("topw"))
+async def top_week(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    conn = await asyncpg.connect(DATABASE_URL)
+    
+    query = """
+        SELECT user_id, SUM(amount) as total 
+        FROM withdraw_requests 
+        WHERE status = 'approved' AND processed_at >= CURRENT_DATE - INTERVAL '7 days'
+        GROUP BY user_id 
+        ORDER BY total DESC 
+        LIMIT 10
+    """
+    
+    turnover = await conn.fetchval("SELECT SUM(amount) FROM withdraw_requests WHERE status = 'approved' AND processed_at >= CURRENT_DATE - INTERVAL '7 days'") or 0
+    
+    top_users = await conn.fetch(query)
+    await conn.close()
+    
+    medals = ["🥇", "🥈", "🥉", "🏅", "🏅", "🏅", "🏅", "🏅", "🏅", "🏅"]
+    
+    top_text = f"<b>🤑 Топ игроков за неделю:</b>\n\n"
+    
+    for i, user in enumerate(top_users):
+        user_id = user["user_id"]
+        total = user["total"] / 100
+        
+        conn = await asyncpg.connect(DATABASE_URL)
+        username = await conn.fetchval("SELECT username FROM users WHERE id = $1", user_id)
+        await conn.close()
+        
+        display_name = username if username else f"ID:{user_id}"
+        medal = medals[i] if i < len(medals) else "🏅"
+        
+        top_text += f"{medal} <b><a href=\"https://t.me/Hot_dicebot?start=user_{user_id}\">{display_name}</a></b> - <b>{total:.2f}$</b>\n"
+    
+    top_text += f"\n<b>💸 Оборот за неделю: {turnover/100:.2f}$</b>"
+    
+    await message.answer(top_text, parse_mode=ParseMode.HTML)
+
+@dp.message(Command("topm"))
+async def top_month(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+    
+    conn = await asyncpg.connect(DATABASE_URL)
+    
+    query = """
+        SELECT user_id, SUM(amount) as total 
+        FROM withdraw_requests 
+        WHERE status = 'approved' AND processed_at >= CURRENT_DATE - INTERVAL '30 days'
+        GROUP BY user_id 
+        ORDER BY total DESC 
+        LIMIT 10
+    """
+    
+    turnover = await conn.fetchval("SELECT SUM(amount) FROM withdraw_requests WHERE status = 'approved' AND processed_at >= CURRENT_DATE - INTERVAL '30 days'") or 0
+    
+    top_users = await conn.fetch(query)
+    await conn.close()
+    
+    medals = ["🥇", "🥈", "🥉", "🏅", "🏅", "🏅", "🏅", "🏅", "🏅", "🏅"]
+    
+    top_text = f"<b>🤑 Топ игроков за месяц:</b>\n\n"
+    
+    for i, user in enumerate(top_users):
+        user_id = user["user_id"]
+        total = user["total"] / 100
+        
+        conn = await asyncpg.connect(DATABASE_URL)
+        username = await conn.fetchval("SELECT username FROM users WHERE id = $1", user_id)
+        await conn.close()
+        
+        display_name = username if username else f"ID:{user_id}"
+        medal = medals[i] if i < len(medals) else "🏅"
+        
+        top_text += f"{medal} <b><a href=\"https://t.me/Hot_dicebot?start=user_{user_id}\">{display_name}</a></b> - <b>{total:.2f}$</b>\n"
+    
+    top_text += f"\n<b>💸 Оборот за месяц: {turnover/100:.2f}$</b>"
+    
+    await message.answer(top_text, parse_mode=ParseMode.HTML)
+
 @dp.callback_query()
 async def handle_callbacks(callback: types.CallbackQuery):
     await callback.answer("🚧 В разработке", show_alert=True)
