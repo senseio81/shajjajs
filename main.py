@@ -525,7 +525,7 @@ async def process_bet(message: Message, state: FSMContext):
     await conn.execute("UPDATE users SET balance = balance - $1 WHERE id = $2", int(bet * 100), message.from_user.id)
     await conn.close()
     
-    await asyncio.sleep(1)
+    await asyncio.sleep(3)
     dice_msg = await message.reply_dice(emoji="🎲")
     dice_value = dice_msg.dice.value
     
@@ -556,6 +556,7 @@ async def process_bet(message: Message, state: FSMContext):
         await conn.close()
         
         result_text = "✅ Победа!"
+        win_text = f"\n\n<blockquote>Начислено: {win_amount} USDT</blockquote>"
         photo = FSInputFile("IMG_0770.jpeg")
         await log_action(message.from_user.id, "dice_win", f"Выигрыш {win_amount}$ (ставка {bet}$, режим {mode_text}, значение {dice_value})")
     else:
@@ -564,6 +565,7 @@ async def process_bet(message: Message, state: FSMContext):
         await conn.close()
         
         result_text = "🚫 Поражение. Попробуй снова!"
+        win_text = ""
         photo = FSInputFile("IMG_0769.jpeg")
         await log_action(message.from_user.id, "dice_lose", f"Проигрыш {bet}$ (режим {mode_text}, значение {dice_value})")
     
@@ -572,7 +574,8 @@ async def process_bet(message: Message, state: FSMContext):
     result_message = (
         f"{result_text}\n\n"
         f"<blockquote>Выпало значение: {dice_value}</blockquote>\n"
-        f"<blockquote>Коэффициент: {coeff}x</blockquote>\n"
+        f"<blockquote>Коэффициент: {coeff}x</blockquote>"
+        f"{win_text}\n"
         f"<blockquote>{quote}</blockquote>"
     )
     
