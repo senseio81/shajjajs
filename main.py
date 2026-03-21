@@ -8,43 +8,17 @@ import logging
 logging.basicConfig(level=logging.INFO)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
-if not BOT_TOKEN:
-    raise ValueError("Токен не найден! Укажите переменную окружения BOT_TOKEN")
-
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-user_data = {}
+@dp.message(Command("dice"))
+async def dice_cmd(message: Message):
+    await message.answer_dice(emoji="🎲")
 
-@dp.message(Command("start"))
-async def start(message: Message):
-    await message.answer("Введи любое число (например 5)")
-    user_data[message.from_user.id] = {}
-
-@dp.message(F.text.regexp(r"^\d+(\.\d+)?$"))
-async def handle_number(message: Message):
-    try:
-        bet = float(message.text)
-        user_data[message.from_user.id] = {"bet": bet}
-        logging.info(f"User {message.from_user.id} bet {bet}, sending dice...")
-        await message.reply_dice(emoji="🎲")
-    except:
-        await message.answer("Введи число")
-
-@dp.message(F.content_type.in_({"dice"}))
+@dp.message(F.dice)
 async def dice_result(message: Message):
-    dice_value = message.dice.value
-    user_id = message.from_user.id
-    
-    logging.info(f"Dice received from {user_id}, value: {dice_value}")
-    
-    if user_id in user_data:
-        bet = user_data[user_id]["bet"]
-        result = "✅ Победа!" if dice_value % 2 == 0 else "🚫 Поражение!"
-        await message.answer(f"{result}\nВыпало: {dice_value}\nСтавка: {bet}")
-        del user_data[user_id]
-    else:
-        await message.answer(f"Выпало: {dice_value}")
+    logging.info(f"Dice received: {message.dice.value}")
+    await message.reply(f"🎲 Выпало: {message.dice.value}")
 
 async def main():
     await dp.start_polling(bot)
