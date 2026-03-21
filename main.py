@@ -31,8 +31,6 @@ async def check_profile(callback: types.CallbackQuery):
         await callback.answer("🎉 Вы участвуете!", show_alert=True)
     else:
         await callback.answer("❌ Условия не выполнены", show_alert=True)
-    
-    await callback.answer()
 
 async def main():
     await dp.start_polling(bot)
