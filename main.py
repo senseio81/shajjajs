@@ -534,20 +534,24 @@ async def process_bet(message: Message, state: FSMContext):
     await conn.execute("UPDATE users SET balance = balance - $1 WHERE id = $2", int(bet * 100), message.from_user.id)
     await conn.close()
     
+    # Сохраняем данные для игры (НЕ сохраняем state!)
     user_dice_data[message.from_user.id] = {
         "bet": bet,
         "game_mode": game_mode,
         "coeff": coeff,
-        "sector": sector,
-        "state": state
+        "sector": sector
     }
     
     logger.info(f"Saved dice data for user {message.from_user.id}: {user_dice_data[message.from_user.id]}")
     logger.info("Sending dice...")
     await message.answer_dice(emoji="🎲")
     logger.info("Dice sent, waiting for response...")
+    
+    # Очищаем состояние, так как игра начата
+    await state.clear()
 
-@dp.message(F.content_type == ContentType.DICE)
+# ИСПРАВЛЕННЫЙ ОБРАБОТЧИК DICE - используем F.dice вместо ContentType.DICE
+@dp.message(F.dice)
 async def handle_dice(message: Message):
     logger.info("=" * 50)
     logger.info(f"DICE HANDLER TRIGGERED!")
@@ -558,6 +562,7 @@ async def handle_dice(message: Message):
     
     user_id = message.from_user.id
     
+    # Проверяем, есть ли данные для этого пользователя
     if user_id not in user_dice_data:
         logger.warning(f"NO DICE DATA FOUND for user {user_id}")
         logger.warning(f"Available data: {user_dice_data}")
@@ -565,16 +570,17 @@ async def handle_dice(message: Message):
     
     logger.info(f"Found dice data for user {user_id}: {user_dice_data[user_id]}")
     
+    # Получаем данные и удаляем их из словаря
     data = user_dice_data.pop(user_id)
     bet = data["bet"]
     game_mode = data["game_mode"]
     coeff = data["coeff"]
     sector = data.get("sector")
-    state = data["state"]
     
     dice_value = message.dice.value
     logger.info(f"Processing: mode={game_mode}, bet={bet}, coeff={coeff}, dice={dice_value}")
     
+    # Определяем победу в зависимости от режима
     if game_mode == "even":
         win = dice_value % 2 == 0
         mode_text = "Четное"
@@ -596,13 +602,18 @@ async def handle_dice(message: Message):
     
     logger.info(f"Result: win={win}, mode_text={mode_text}")
     
+    conn = await asyncpg.connect(DATABASE_URL)
+    
     if win:
         win_amount = bet * coeff
         logger.info(f"WIN! Amount: {win_amount}")
-        conn = await asyncpg.connect(DATABASE_URL)
-        await conn.execute("UPDATE users SET balance = balance + $1, total_bet = total_bet + $2 WHERE id = $3", 
-                          int(win_amount * 100), int(bet * 100), user_id)
-        await conn.close()
+        
+        await conn.execute(
+            "UPDATE users SET balance = balance + $1, total_bet = total_bet + $2 WHERE id = $3", 
+            int(win_amount * 100), 
+            int(bet * 100), 
+            user_id
+        )
         
         result_text = "✅ Победа!"
         photo = FSInputFile("IMG_0770.jpeg")
@@ -610,28 +621,35 @@ async def handle_dice(message: Message):
         logger.info(f"User {user_id} won {win_amount}$")
     else:
         logger.info(f"LOSS! Amount: {bet}")
-        conn = await asyncpg.connect(DATABASE_URL)
-        await conn.execute("UPDATE users SET total_bet = total_bet + $1 WHERE id = $2", int(bet * 100), user_id)
         
+        await conn.execute(
+            "UPDATE users SET total_bet = total_bet + $1 WHERE id = $2", 
+            int(bet * 100), 
+            user_id
+        )
+        
+        # Начисляем бонус рефереру (5% от проигрыша)
         user = await conn.fetchrow("SELECT referrer_id FROM users WHERE id = $1", user_id)
         if user and user["referrer_id"]:
             referrer_bonus = int(bet * 100 * 0.05)
-            await conn.execute("UPDATE users SET balance = balance + $1, referral_earnings = referral_earnings + $2 WHERE id = $3", 
-                              referrer_bonus, referrer_bonus, user["referrer_id"])
+            await conn.execute(
+                "UPDATE users SET balance = balance + $1, referral_earnings = referral_earnings + $2 WHERE id = $3", 
+                referrer_bonus, 
+                referrer_bonus, 
+                user["referrer_id"]
+            )
             await log_action(user["referrer_id"], "referral_earning", f"Начислено {referrer_bonus/100}$ за проигрыш реферала {user_id}")
-        
-        await conn.close()
         
         result_text = "🚫 Поражение. Попробуй снова!"
         photo = FSInputFile("IMG_0769.jpeg")
         await log_action(user_id, "dice_lose", f"Проигрыш {bet}$ (режим {mode_text}, значение {dice_value})")
         logger.info(f"User {user_id} lost {bet}$")
     
-    quote = random.choice(casino_quotes)
-    
-    conn = await asyncpg.connect(DATABASE_URL)
+    # Получаем обновленный баланс
     user = await conn.fetchrow("SELECT balance FROM users WHERE id = $1", user_id)
     await conn.close()
+    
+    quote = random.choice(casino_quotes)
     
     result_message = (
         f"{result_text}\n\n"
@@ -648,7 +666,7 @@ async def handle_dice(message: Message):
         parse_mode=ParseMode.HTML,
         reply_markup=get_make_bet_inline()
     )
-    await state.clear()
+    
     logger.info(f"DICE HANDLER FINISHED for user {user_id}")
     logger.info("=" * 50)
 
