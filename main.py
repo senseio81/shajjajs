@@ -361,9 +361,13 @@ async def dice_start(callback: types.CallbackQuery):
         await callback.answer("💳 Минимальная ставка 0.30 USDT, пополните баланс", show_alert=True)
         return
     
-    await callback.message.edit_caption(
-        caption="<b>🎲 Выберите режим игры:</b>",
-        parse_mode=ParseMode.HTML,
+    photo = FSInputFile("IMG_0754.jpeg")
+    await callback.message.edit_media(
+        types.InputMediaPhoto(
+            media=photo,
+            caption="<b>🎲 Выберите режим игры:</b>",
+            parse_mode=ParseMode.HTML
+        ),
         reply_markup=get_dice_modes()
     )
     await callback.answer()
@@ -412,9 +416,13 @@ async def dice_odd(callback: types.CallbackQuery, state: FSMContext):
 @rate_limit(limit=10)
 @dp.callback_query(F.data == "dice_sector")
 async def dice_sector(callback: types.CallbackQuery):
-    await callback.message.edit_caption(
-        caption="<b>🎲 Выберите сектор:</b>",
-        parse_mode=ParseMode.HTML,
+    photo = FSInputFile("IMG_0754.jpeg")
+    await callback.message.edit_media(
+        types.InputMediaPhoto(
+            media=photo,
+            caption="<b>🎲 Выберите сектор:</b>",
+            parse_mode=ParseMode.HTML
+        ),
         reply_markup=get_dice_sectors()
     )
     await callback.answer()
@@ -422,9 +430,13 @@ async def dice_sector(callback: types.CallbackQuery):
 @rate_limit(limit=10)
 @dp.callback_query(F.data == "dice_overunder")
 async def dice_overunder(callback: types.CallbackQuery):
-    await callback.message.edit_caption(
-        caption="<b>🎲 Выберите режим:</b>",
-        parse_mode=ParseMode.HTML,
+    photo = FSInputFile("IMG_0754.jpeg")
+    await callback.message.edit_media(
+        types.InputMediaPhoto(
+            media=photo,
+            caption="<b>🎲 Выберите режим:</b>",
+            parse_mode=ParseMode.HTML
+        ),
         reply_markup=get_dice_overunder()
     )
     await callback.answer()
@@ -451,9 +463,13 @@ async def overunder_under(callback: types.CallbackQuery, state: FSMContext):
 @rate_limit(limit=10)
 @dp.callback_query(F.data == "back_to_dice_modes")
 async def back_to_dice_modes(callback: types.CallbackQuery):
-    await callback.message.edit_caption(
-        caption="<b>🎲 Выберите режим игры:</b>",
-        parse_mode=ParseMode.HTML,
+    photo = FSInputFile("IMG_0754.jpeg")
+    await callback.message.edit_media(
+        types.InputMediaPhoto(
+            media=photo,
+            caption="<b>🎲 Выберите режим игры:</b>",
+            parse_mode=ParseMode.HTML
+        ),
         reply_markup=get_dice_modes()
     )
     await callback.answer()
@@ -471,9 +487,13 @@ async def show_bet_request(message, user_id, state, mode_name, coeff):
         f"• Минимальная сумма ставки 0.30 USDT"
     )
     
-    await message.edit_caption(
-        caption=bet_text,
-        parse_mode=ParseMode.HTML,
+    photo = FSInputFile("IMG_0754.jpeg")
+    await message.edit_media(
+        types.InputMediaPhoto(
+            media=photo,
+            caption=bet_text,
+            parse_mode=ParseMode.HTML
+        ),
         reply_markup=get_bet_cancel_inline()
     )
     await state.set_state(GameStates.waiting_for_bet)
@@ -514,7 +534,7 @@ async def process_bet(message: Message, state: FSMContext):
         "state": state
     }
     
-    await message.answer_dice(emoji="🎲")
+    await message.reply_dice(emoji="🎲")
 
 @dp.message(F.dice)
 async def handle_dice(message: Message):
@@ -597,9 +617,13 @@ async def make_bet(callback: types.CallbackQuery):
         await callback.answer("💳 Минимальная ставка 0.30 USDT, пополните баланс", show_alert=True)
         return
     
-    await callback.message.edit_caption(
-        caption="<b>🎲 Выберите режим игры:</b>",
-        parse_mode=ParseMode.HTML,
+    photo = FSInputFile("IMG_0754.jpeg")
+    await callback.message.edit_media(
+        types.InputMediaPhoto(
+            media=photo,
+            caption="<b>🎲 Выберите режим игры:</b>",
+            parse_mode=ParseMode.HTML
+        ),
         reply_markup=get_dice_modes()
     )
     await callback.answer()
