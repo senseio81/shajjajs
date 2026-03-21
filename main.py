@@ -30,6 +30,7 @@ dp = Dispatcher(storage=storage)
 
 user_invoice_messages = {}
 rate_limit_dict = defaultdict(list)
+user_dice_data = {}
 
 casino_quotes = [
     "Удача любит смелых!",
@@ -303,7 +304,7 @@ async def start_command(message: Message):
 @rate_limit(limit=10)
 @dp.message(F.text == "💳 Профиль")
 async def profile_command(message: Message):
-    await message.reply("🎲")
+    await message.reply_dice(emoji="🎲")
     
     conn = await asyncpg.connect(DATABASE_URL)
     user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", message.from_user.id)
@@ -313,7 +314,7 @@ async def profile_command(message: Message):
         await message.answer("Ошибка. Напишите /start")
         return
     
-    await log_action(message.from_user.id, "profile", f"Просмотр профиля, баланс: {user['balance']}$")
+    await log_action(message.from_user.id, "profile", f"Просмотр профиля, баланс: {user['balance']/100}$")
     
     rank_name, next_threshold = get_rank(user["total_bet"])
     remaining = max(0, next_threshold - user["total_bet"])
@@ -385,9 +386,13 @@ async def bowling_stub(callback: types.CallbackQuery):
 @rate_limit(limit=10)
 @dp.callback_query(F.data == "back_to_games")
 async def back_to_games(callback: types.CallbackQuery):
-    await callback.message.edit_caption(
-        caption="<b>🎉 Раздел доступных режимов</b>\n└ Выберите игру:",
-        parse_mode=ParseMode.HTML,
+    photo = FSInputFile("IMG_0754.jpeg")
+    await callback.message.edit_media(
+        types.InputMediaPhoto(
+            media=photo,
+            caption="<b>🎉 Раздел доступных режимов</b>\n└ Выберите игру:",
+            parse_mode=ParseMode.HTML
+        ),
         reply_markup=get_games_menu()
     )
     await callback.answer()
@@ -501,25 +506,45 @@ async def process_bet(message: Message, state: FSMContext):
     await conn.execute("UPDATE users SET balance = balance - $1 WHERE id = $2", int(bet * 100), message.from_user.id)
     await conn.close()
     
-    await message.answer("🎲")
-    await asyncio.sleep(2)
+    user_dice_data[message.from_user.id] = {
+        "bet": bet,
+        "game_mode": game_mode,
+        "coeff": coeff,
+        "sector": sector,
+        "state": state
+    }
     
-    dice = random.randint(1, 6)
+    await message.answer_dice(emoji="🎲")
+
+@dp.message(F.dice)
+async def handle_dice(message: Message):
+    user_id = message.from_user.id
+    if user_id not in user_dice_data:
+        return
+    
+    data = user_dice_data.pop(user_id)
+    bet = data["bet"]
+    game_mode = data["game_mode"]
+    coeff = data["coeff"]
+    sector = data.get("sector")
+    state = data["state"]
+    
+    dice_value = message.dice.value
     
     if game_mode == "even":
-        win = dice % 2 == 0
+        win = dice_value % 2 == 0
         mode_text = "Четное"
     elif game_mode == "odd":
-        win = dice % 2 == 1
+        win = dice_value % 2 == 1
         mode_text = "Нечетное"
     elif game_mode == "sector":
-        win = dice == sector
+        win = dice_value == sector
         mode_text = f"Сектор {sector}"
     elif game_mode == "over":
-        win = dice >= 4
+        win = dice_value >= 4
         mode_text = "Больше 3"
     elif game_mode == "under":
-        win = dice <= 3
+        win = dice_value <= 3
         mode_text = "Меньше 4"
     else:
         win = False
@@ -529,26 +554,26 @@ async def process_bet(message: Message, state: FSMContext):
         win_amount = bet * coeff
         conn = await asyncpg.connect(DATABASE_URL)
         await conn.execute("UPDATE users SET balance = balance + $1, total_bet = total_bet + $2 WHERE id = $3", 
-                          int(win_amount * 100), int(bet * 100), message.from_user.id)
+                          int(win_amount * 100), int(bet * 100), user_id)
         await conn.close()
         
         result_text = "✅ Победа!"
         photo = FSInputFile("IMG_0770.jpeg")
-        await log_action(message.from_user.id, "dice_win", f"Выигрыш {win_amount}$ (ставка {bet}$, режим {mode_text})")
+        await log_action(user_id, "dice_win", f"Выигрыш {win_amount}$ (ставка {bet}$, режим {mode_text}, значение {dice_value})")
     else:
         conn = await asyncpg.connect(DATABASE_URL)
-        await conn.execute("UPDATE users SET total_bet = total_bet + $1 WHERE id = $2", int(bet * 100), message.from_user.id)
+        await conn.execute("UPDATE users SET total_bet = total_bet + $1 WHERE id = $2", int(bet * 100), user_id)
         await conn.close()
         
         result_text = "🚫 Поражение. Попробуй снова!"
         photo = FSInputFile("IMG_0769.jpeg")
-        await log_action(message.from_user.id, "dice_lose", f"Проигрыш {bet}$ (режим {mode_text})")
+        await log_action(user_id, "dice_lose", f"Проигрыш {bet}$ (режим {mode_text}, значение {dice_value})")
     
     quote = random.choice(casino_quotes)
     
     result_message = (
         f"{result_text}\n\n"
-        f"<blockquote>Выпало значение: {dice}</blockquote>\n"
+        f"<blockquote>Выпало значение: {dice_value}</blockquote>\n"
         f"<blockquote>Коэффициент: {coeff}x</blockquote>\n"
         f"<blockquote>{quote}</blockquote>"
     )
