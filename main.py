@@ -84,9 +84,8 @@ class GameStates(StatesGroup):
 
 async def init_db():
     conn = await asyncpg.connect(DATABASE_URL)
-    await conn.execute("DROP TABLE IF EXISTS users")
     await conn.execute("""
-        CREATE TABLE users (
+        CREATE TABLE IF NOT EXISTS users (
             id BIGINT PRIMARY KEY,
             username TEXT,
             balance INTEGER DEFAULT 0,
@@ -121,11 +120,14 @@ async def init_db():
     await conn.close()
 
 async def log_action(user_id: int, action: str, details: str = ""):
-    conn = await asyncpg.connect(DATABASE_URL)
-    await conn.execute("""
-        INSERT INTO logs (user_id, action, details) VALUES ($1, $2, $3)
-    """, user_id, action, details)
-    await conn.close()
+    try:
+        conn = await asyncpg.connect(DATABASE_URL)
+        await conn.execute("""
+            INSERT INTO logs (user_id, action, details) VALUES ($1, $2, $3)
+        """, user_id, action, details)
+        await conn.close()
+    except Exception as e:
+        logger.error(f"Log action error: {e}")
 
 def get_rank(total_bet):
     if total_bet < 50:
@@ -287,12 +289,11 @@ async def start_command(message: Message):
     
     conn = await asyncpg.connect(DATABASE_URL)
     
-    user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", message.from_user.id)
-    if not user:
-        await conn.execute("""
-            INSERT INTO users (id, username, referrer_id) VALUES ($1, $2, $3)
-        """, message.from_user.id, message.from_user.username, referrer_id)
-        await log_action(message.from_user.id, "start", "Регистрация в боте")
+    await conn.execute("""
+        INSERT INTO users (id, username, referrer_id) 
+        VALUES ($1, $2, $3)
+        ON CONFLICT (id) DO NOTHING
+    """, message.from_user.id, message.from_user.username, referrer_id)
     
     await conn.close()
     
@@ -546,7 +547,6 @@ async def process_bet(message: Message, state: FSMContext):
     await message.answer_dice(emoji="🎲")
     logger.info("Dice sent, waiting for response...")
 
-# ========== ИСПРАВЛЕННЫЙ ОБРАБОТЧИК DICE С ЖЕСТКОЙ ОТЛАДКОЙ ==========
 @dp.message(F.content_type == ContentType.DICE)
 async def handle_dice(message: Message):
     logger.info("=" * 50)
@@ -612,6 +612,14 @@ async def handle_dice(message: Message):
         logger.info(f"LOSS! Amount: {bet}")
         conn = await asyncpg.connect(DATABASE_URL)
         await conn.execute("UPDATE users SET total_bet = total_bet + $1 WHERE id = $2", int(bet * 100), user_id)
+        
+        user = await conn.fetchrow("SELECT referrer_id FROM users WHERE id = $1", user_id)
+        if user and user["referrer_id"]:
+            referrer_bonus = int(bet * 100 * 0.05)
+            await conn.execute("UPDATE users SET balance = balance + $1, referral_earnings = referral_earnings + $2 WHERE id = $3", 
+                              referrer_bonus, referrer_bonus, user["referrer_id"])
+            await log_action(user["referrer_id"], "referral_earning", f"Начислено {referrer_bonus/100}$ за проигрыш реферала {user_id}")
+        
         await conn.close()
         
         result_text = "🚫 Поражение. Попробуй снова!"
