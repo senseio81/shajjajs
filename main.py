@@ -94,7 +94,7 @@ class GameStates(StatesGroup):
 async def init_db():
     conn = await asyncpg.connect(DATABASE_URL)
     await conn.execute("""
-        CREATE TABLE users (
+        CREATE TABLE IF NOT EXISTS users (
             id BIGINT PRIMARY KEY,
             username TEXT,
             balance INTEGER DEFAULT 0,
