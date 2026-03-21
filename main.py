@@ -31,7 +31,7 @@ async def handle_number(message: Message):
     except:
         await message.answer("Введи число")
 
-@dp.message(F.dice)
+@dp.message(F.content_type.in_({"dice"}))
 async def dice_result(message: Message):
     dice_value = message.dice.value
     user_id = message.from_user.id
