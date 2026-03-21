@@ -500,8 +500,11 @@ async def show_bet_request(message, user_id, state, mode_name, coeff):
 
 @dp.message(GameStates.waiting_for_bet)
 async def process_bet(message: Message, state: FSMContext):
+    logging.info("=== process_bet START ===")
+    
     try:
         bet = float(message.text.replace(",", "."))
+        logging.info(f"Bet: {bet}")
         if bet < 0.30:
             await message.answer("❌ Минимальная ставка 0.30 USDT")
             return
@@ -510,6 +513,8 @@ async def process_bet(message: Message, state: FSMContext):
         return
     
     data = await state.get_data()
+    logging.info(f"Game data: {data}")
+    
     game_mode = data.get("game_mode")
     coeff = data.get("coeff", 1.85)
     sector = data.get("sector")
@@ -534,8 +539,10 @@ async def process_bet(message: Message, state: FSMContext):
         "state": state
     }
     
+    logging.info("Sending dice...")
     await message.answer_dice(emoji="🎲")
-
+    logging.info("Dice sent")
+    
 @dp.message(F.dice)
 async def handle_dice(message: Message):
     user_id = message.from_user.id
