@@ -548,7 +548,7 @@ async def process_bet(message: Message, state: FSMContext):
     await conn.execute("UPDATE users SET balance = balance - $1 WHERE id = $2", int(bet * 100), message.from_user.id)
     await conn.close()
     
-    # Сохраняем данные игры (НЕ сохраняем state!)
+    # Сохраняем данные игры
     user_dice_data[message.from_user.id] = {
         "bet": bet,
         "game_mode": game_mode,
@@ -559,8 +559,9 @@ async def process_bet(message: Message, state: FSMContext):
     logger.info(f"Saved dice data for user {message.from_user.id}: {user_dice_data[message.from_user.id]}")
     logger.info("Sending dice...")
     
-    # Отправляем кубик через bot.send_dice() - бот кидает, пользователь не нажимает!
-    await bot.send_dice(chat_id=message.chat.id, emoji="🎲")
+    # Отправляем кубик - бот кидает, пользователь не нажимает!
+    # Используем message.answer_dice() чтобы результат пришел как сообщение от бота
+    await message.answer_dice(emoji="🎲")
     
     logger.info("Dice sent, waiting for result...")
     
@@ -578,15 +579,13 @@ async def handle_dice(message: Message):
     logger.info(f"Dice emoji: {message.dice.emoji}")
     
     # Определяем реальный ID пользователя
-    # Если сообщение от бота - user_id берем из chat.id
-    # Если сообщение от пользователя - user_id берем из from_user.id
+    # Если сообщение от бота - это наш автоматический бросок
     if message.from_user.id == bot.id:
         user_id = message.chat.id  # Свои сообщения: chat.id = ID пользователя
-        logger.info(f"Это сообщение от бота, реальный user_id: {user_id}")
+        logger.info(f"✅ Это сообщение от бота (автоматический бросок), реальный user_id: {user_id}")
     else:
-        user_id = message.from_user.id  # Чужие сообщения
-        logger.info(f"Это сообщение от пользователя, user_id: {user_id}")
         # Если пользователь сам кинул кубик - игнорируем
+        logger.info(f"❌ Игнорируем кубик от пользователя {message.from_user.id}")
         return
     
     logger.info(f"user_dice_data keys: {list(user_dice_data.keys())}")
