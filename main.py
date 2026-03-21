@@ -30,6 +30,7 @@ dp = Dispatcher(storage=storage)
 
 user_invoice_messages = {}
 rate_limit_dict = defaultdict(list)
+user_plane_games = {}
 
 win_quotes = [
     "В этот раз удача выбрала тебя. Поздравляю!",
@@ -92,6 +93,7 @@ class GameStates(StatesGroup):
     waiting_for_bet = State()
     waiting_for_bowling_bet = State()
     waiting_for_darts_bet = State()
+    waiting_for_plane_bet = State()
 
 async def init_db():
     conn = await asyncpg.connect(DATABASE_URL)
@@ -298,6 +300,16 @@ def get_darts_modes():
         ]
     )
 
+def get_plane_buttons():
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🟢 ЗАБРАТЬ", callback_data="plane_cashout"),
+                InlineKeyboardButton(text="❌ ВЫЙТИ", callback_data="plane_exit")
+            ]
+        ]
+    )
+
 def get_bet_cancel_inline():
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -434,8 +446,34 @@ async def darts_menu(callback: types.CallbackQuery):
 
 @rate_limit(limit=10)
 @dp.callback_query(F.data == "game_plane")
-async def plane_stub(callback: types.CallbackQuery):
-    await callback.answer("🛩️ Самолетик в разработке", show_alert=True)
+async def plane_start(callback: types.CallbackQuery):
+    conn = await asyncpg.connect(DATABASE_URL)
+    user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", callback.from_user.id)
+    await conn.close()
+    
+    if user["balance"] < 30:
+        await callback.answer("💳 Минимальная ставка 0.30 USDT, пополните баланс", show_alert=True)
+        return
+    
+    bet_text = (
+        f"<b>🛩️ САМОЛЕТИК</b>\n\n"
+        f"<blockquote>Коэффициент: 1.00x</blockquote>\n"
+        f"<blockquote>Комиссия: 4.5%</blockquote>\n"
+        f"<blockquote>Ваш баланс: {user['balance']/100} USDT</blockquote>\n\n"
+        f"Введите сумму ставки:"
+    )
+    
+    photo = FSInputFile("IMG_0774.jpeg")
+    await callback.message.edit_media(
+        types.InputMediaPhoto(
+            media=photo,
+            caption=bet_text,
+            parse_mode=ParseMode.HTML
+        ),
+        reply_markup=get_bet_cancel_inline()
+    )
+    await callback.answer()
+    await callback.state.set_state(GameStates.waiting_for_plane_bet)
 
 @rate_limit(limit=10)
 @dp.callback_query(F.data == "game_bowling")
@@ -473,180 +511,8 @@ async def back_to_games(callback: types.CallbackQuery):
     )
     await callback.answer()
 
-@rate_limit(limit=10)
-@dp.callback_query(F.data == "dice_even")
-async def dice_even(callback: types.CallbackQuery, state: FSMContext):
-    await state.update_data(game_mode="even", coeff=1.85)
-    await show_bet_request(callback.message, callback.from_user.id, state, "Четное", 1.85)
-
-@rate_limit(limit=10)
-@dp.callback_query(F.data == "dice_odd")
-async def dice_odd(callback: types.CallbackQuery, state: FSMContext):
-    await state.update_data(game_mode="odd", coeff=1.85)
-    await show_bet_request(callback.message, callback.from_user.id, state, "Нечетное", 1.85)
-
-@rate_limit(limit=10)
-@dp.callback_query(F.data == "dice_sector")
-async def dice_sector(callback: types.CallbackQuery):
-    photo = FSInputFile("IMG_0754.jpeg")
-    await callback.message.edit_media(
-        types.InputMediaPhoto(
-            media=photo,
-            caption="<b>🎲 Выберите сектор:</b>",
-            parse_mode=ParseMode.HTML
-        ),
-        reply_markup=get_dice_sectors()
-    )
-    await callback.answer()
-
-@rate_limit(limit=10)
-@dp.callback_query(F.data == "dice_overunder")
-async def dice_overunder(callback: types.CallbackQuery):
-    photo = FSInputFile("IMG_0754.jpeg")
-    await callback.message.edit_media(
-        types.InputMediaPhoto(
-            media=photo,
-            caption="<b>🎲 Выберите режим:</b>",
-            parse_mode=ParseMode.HTML
-        ),
-        reply_markup=get_dice_overunder()
-    )
-    await callback.answer()
-
-@rate_limit(limit=10)
-@dp.callback_query(F.data.startswith("sector_"))
-async def sector_selected(callback: types.CallbackQuery, state: FSMContext):
-    sector_num = int(callback.data.split("_")[1])
-    await state.update_data(game_mode="sector", sector=sector_num, coeff=5.0)
-    await show_bet_request(callback.message, callback.from_user.id, state, f"Сектор {sector_num}", 5.0)
-
-@rate_limit(limit=10)
-@dp.callback_query(F.data == "overunder_over")
-async def overunder_over(callback: types.CallbackQuery, state: FSMContext):
-    await state.update_data(game_mode="over", coeff=2.0)
-    await show_bet_request(callback.message, callback.from_user.id, state, "Больше 3", 2.0)
-
-@rate_limit(limit=10)
-@dp.callback_query(F.data == "overunder_under")
-async def overunder_under(callback: types.CallbackQuery, state: FSMContext):
-    await state.update_data(game_mode="under", coeff=2.0)
-    await show_bet_request(callback.message, callback.from_user.id, state, "Меньше 4", 2.0)
-
-@rate_limit(limit=10)
-@dp.callback_query(F.data == "back_to_dice_modes")
-async def back_to_dice_modes(callback: types.CallbackQuery):
-    photo = FSInputFile("IMG_0754.jpeg")
-    await callback.message.edit_media(
-        types.InputMediaPhoto(
-            media=photo,
-            caption="<b>🎲 Выберите режим игры:</b>",
-            parse_mode=ParseMode.HTML
-        ),
-        reply_markup=get_dice_modes()
-    )
-    await callback.answer()
-
-@rate_limit(limit=10)
-@dp.callback_query(F.data.startswith("bowling_"))
-async def bowling_mode_selected(callback: types.CallbackQuery, state: FSMContext):
-    mode = callback.data.split("_")[1]
-    
-    if mode == "over":
-        coeff = 1.45
-        mode_text = "Больше 3 кеглей"
-    elif mode == "under":
-        coeff = 3.20
-        mode_text = "Меньше 4 кеглей"
-    elif mode == "strike":
-        coeff = 9.0
-        mode_text = "Страйк"
-    else:
-        return
-    
-    await state.update_data(game_type="bowling", bowling_mode=mode, coeff=coeff, mode_text=mode_text)
-    
-    conn = await asyncpg.connect(DATABASE_URL)
-    user = await conn.fetchrow("SELECT balance FROM users WHERE id = $1", callback.from_user.id)
-    await conn.close()
-    
-    bet_text = (
-        f"<b>🎳 Боулинг - {mode_text}</b>\n\n"
-        f"<blockquote>Коэффициент: {coeff}x</blockquote>\n"
-        f"<blockquote>Комиссия: 4.5%</blockquote>\n"
-        f"<blockquote>Ваш баланс: {user['balance']/100} USDT</blockquote>\n\n"
-        f"Введите сумму ставки:"
-    )
-    
-    photo = FSInputFile("IMG_0772.jpeg")
-    await callback.message.edit_media(
-        types.InputMediaPhoto(
-            media=photo,
-            caption=bet_text,
-            parse_mode=ParseMode.HTML
-        ),
-        reply_markup=get_bet_cancel_inline()
-    )
-    await state.set_state(GameStates.waiting_for_bowling_bet)
-    await callback.answer()
-
-@rate_limit(limit=10)
-@dp.callback_query(F.data.startswith("darts_"))
-async def darts_mode_selected(callback: types.CallbackQuery, state: FSMContext):
-    mode = callback.data.split("_")[1]
-    
-    if mode == "red":
-        coeff = 2.2
-        mode_text = "Красный сектор"
-        win_condition = [1, 2]
-    elif mode == "white":
-        coeff = 2.2
-        mode_text = "Белый сектор"
-        win_condition = [3, 4]
-    elif mode == "center":
-        coeff = 5.5
-        mode_text = "Центр"
-        win_condition = [5]
-    elif mode == "bounce":
-        coeff = 5.5
-        mode_text = "Отскок"
-        win_condition = [6]
-    else:
-        return
-    
-    await state.update_data(
-        game_type="darts",
-        darts_mode=mode,
-        coeff=coeff,
-        mode_text=mode_text,
-        win_condition=win_condition
-    )
-    
-    conn = await asyncpg.connect(DATABASE_URL)
-    user = await conn.fetchrow("SELECT balance FROM users WHERE id = $1", callback.from_user.id)
-    await conn.close()
-    
-    bet_text = (
-        f"<b>🎯 Дартс - {mode_text}</b>\n\n"
-        f"<blockquote>Коэффициент: {coeff}x</blockquote>\n"
-        f"<blockquote>Комиссия: 4.5%</blockquote>\n"
-        f"<blockquote>Ваш баланс: {user['balance']/100} USDT</blockquote>\n\n"
-        f"Введите сумму ставки:"
-    )
-    
-    photo = FSInputFile("IMG_0773.jpeg")
-    await callback.message.edit_media(
-        types.InputMediaPhoto(
-            media=photo,
-            caption=bet_text,
-            parse_mode=ParseMode.HTML
-        ),
-        reply_markup=get_bet_cancel_inline()
-    )
-    await state.set_state(GameStates.waiting_for_darts_bet)
-    await callback.answer()
-
-@dp.message(GameStates.waiting_for_bowling_bet)
-async def process_bowling_bet(message: Message, state: FSMContext):
+@dp.message(GameStates.waiting_for_plane_bet)
+async def process_plane_bet(message: Message, state: FSMContext):
     try:
         bet = float(message.text.replace(",", "."))
         if bet < 0.30:
@@ -655,11 +521,6 @@ async def process_bowling_bet(message: Message, state: FSMContext):
     except:
         await message.answer("❌ Введите число")
         return
-    
-    data = await state.get_data()
-    bowling_mode = data.get("bowling_mode")
-    coeff = data.get("coeff")
-    mode_text = data.get("mode_text")
     
     conn = await asyncpg.connect(DATABASE_URL)
     user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", message.from_user.id)
@@ -673,250 +534,154 @@ async def process_bowling_bet(message: Message, state: FSMContext):
     await conn.execute("UPDATE users SET balance = balance - $1 WHERE id = $2", int(bet * 100), message.from_user.id)
     await conn.close()
     
-    bowling_msg = await message.reply_dice(emoji="🎳")
-    await asyncio.sleep(2)
-    knocked = bowling_msg.dice.value
+    crash_point = random.uniform(1.20, 100.00)
     
-    if bowling_mode == "over":
-        win = knocked > 3
-        win_text = f"Сбито кеглей: {knocked}"
-    elif bowling_mode == "under":
-        win = knocked < 4
-        win_text = f"Сбито кеглей: {knocked}"
-    elif bowling_mode == "strike":
-        win = knocked == 10
-        win_text = f"Сбито кеглей: {knocked}"
-    else:
-        win = False
-        win_text = ""
+    game_data = {
+        "bet": bet,
+        "crash_point": crash_point,
+        "current_multiplier": 1.00,
+        "active": True,
+        "message_id": None,
+        "chat_id": message.chat.id
+    }
     
-    if win:
-        win_amount = bet * coeff
-        conn = await asyncpg.connect(DATABASE_URL)
-        await conn.execute("UPDATE users SET balance = balance + $1, total_bet = total_bet + $2 WHERE id = $3", 
-                          int(win_amount * 100), int(bet * 100), message.from_user.id)
-        await conn.close()
+    msg = await message.answer(
+        f"🛩️ САМОЛЕТИК\n\n"
+        f"Текущий коэффициент: 1.00x\n"
+        f"Ставка: {bet} USDT\n"
+        f"Потенциальный выигрыш: {bet:.2f} USDT",
+        reply_markup=get_plane_buttons()
+    )
+    
+    game_data["message_id"] = msg.message_id
+    user_plane_games[message.from_user.id] = game_data
+    
+    await state.clear()
+    
+    asyncio.create_task(plane_game_loop(message.from_user.id, msg.chat.id, msg.message_id, bet, crash_point))
+
+async def plane_game_loop(user_id, chat_id, message_id, bet, crash_point):
+    multiplier = 1.00
+    step = 0
+    
+    while user_id in user_plane_games and user_plane_games[user_id]["active"]:
+        await asyncio.sleep(0.8)
         
-        result_text = "🎉 <b>Победа. Поздравляем!</b>"
-        win_block = f"\n\n<blockquote>Начислено: {win_amount} USDT</blockquote>"
-        photo = FSInputFile("IMG_0770.jpeg")
-        quote = random.choice(win_quotes)
-        await log_action(message.from_user.id, "bowling_win", f"Выигрыш {win_amount}$ (ставка {bet}$, режим {mode_text}, кегли {knocked})")
-    else:
-        conn = await asyncpg.connect(DATABASE_URL)
-        await conn.execute("UPDATE users SET total_bet = total_bet + $1 WHERE id = $2", int(bet * 100), message.from_user.id)
-        await conn.close()
+        if user_id not in user_plane_games or not user_plane_games[user_id]["active"]:
+            break
         
-        result_text = "🚫 <b>Поражение. Повезет в следующий раз!</b>"
-        win_block = ""
-        photo = FSInputFile("IMG_0769.jpeg")
-        quote = random.choice(lose_quotes)
-        await log_action(message.from_user.id, "bowling_lose", f"Проигрыш {bet}$ (режим {mode_text}, кегли {knocked})")
+        increase = random.uniform(0.05, 0.30)
+        multiplier += increase
+        user_plane_games[user_id]["current_multiplier"] = multiplier
+        
+        win_amount = bet * multiplier
+        
+        try:
+            await bot.edit_message_text(
+                f"🛩️ САМОЛЕТИК\n\n"
+                f"Текущий коэффициент: {multiplier:.2f}x\n"
+                f"Ставка: {bet} USDT\n"
+                f"Потенциальный выигрыш: {win_amount:.2f} USDT",
+                chat_id=chat_id,
+                message_id=message_id,
+                reply_markup=get_plane_buttons()
+            )
+        except:
+            pass
+        
+        if multiplier >= crash_point:
+            if user_id in user_plane_games:
+                data = user_plane_games.pop(user_id)
+                
+                conn = await asyncpg.connect(DATABASE_URL)
+                await conn.execute("UPDATE users SET total_bet = total_bet + $1 WHERE id = $2", int(bet * 100), user_id)
+                await conn.close()
+                
+                quote = random.choice(lose_quotes)
+                photo = FSInputFile("IMG_0769.jpeg")
+                result_text = "💥 <b>САМОЛЕТ УЛЕТЕЛ!</b>"
+                win_text = ""
+                win_block = ""
+                
+                result_message = (
+                    f"{result_text}\n\n"
+                    f"<blockquote>Коэффициент: {crash_point:.2f}x</blockquote>\n"
+                    f"<blockquote>Ставка: {bet} USDT</blockquote>\n"
+                    f"<blockquote>Вы проиграли!</blockquote>\n"
+                    f"{win_block}\n"
+                    f"<blockquote>{quote}</blockquote>"
+                )
+                
+                await bot.send_photo(
+                    chat_id=chat_id,
+                    photo=photo,
+                    caption=result_message,
+                    parse_mode=ParseMode.HTML,
+                    reply_markup=get_make_bet_inline()
+                )
+                
+                await log_action(user_id, "plane_lose", f"Проигрыш {bet}$ (краш на {crash_point:.2f}x)")
+            break
+
+@dp.callback_query(F.data == "plane_cashout")
+async def plane_cashout(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
+    
+    if user_id not in user_plane_games:
+        await callback.answer("Игра не найдена", show_alert=True)
+        return
+    
+    data = user_plane_games.pop(user_id)
+    bet = data["bet"]
+    multiplier = data["current_multiplier"]
+    
+    win_amount = bet * multiplier
+    
+    conn = await asyncpg.connect(DATABASE_URL)
+    await conn.execute("UPDATE users SET balance = balance + $1, total_bet = total_bet + $2 WHERE id = $3", 
+                      int(win_amount * 100), int(bet * 100), user_id)
+    await conn.close()
+    
+    quote = random.choice(win_quotes)
+    photo = FSInputFile("IMG_0770.jpeg")
+    result_text = "✅ <b>ВЫ ВЫИГРАЛИ!</b>"
     
     result_message = (
         f"{result_text}\n\n"
-        f"<blockquote>{win_text}</blockquote>\n"
-        f"<blockquote>Коэффициент: {coeff}x</blockquote>\n"
-        f"{win_block}\n"
+        f"<blockquote>Ставка: {bet} USDT</blockquote>\n"
+        f"<blockquote>Коэффициент: {multiplier:.2f}x</blockquote>\n"
+        f"<blockquote>Выигрыш: {win_amount:.2f} USDT</blockquote>\n"
         f"<blockquote>{quote}</blockquote>"
     )
     
-    await bowling_msg.reply_photo(
+    await callback.message.edit_reply_markup(reply_markup=None)
+    await callback.message.answer_photo(
         photo=photo,
         caption=result_message,
         parse_mode=ParseMode.HTML,
         reply_markup=get_make_bet_inline()
     )
-    await state.clear()
+    
+    await log_action(user_id, "plane_win", f"Выигрыш {win_amount}$ (ставка {bet}$, множитель {multiplier:.2f}x)")
+    await callback.answer()
 
-@dp.message(GameStates.waiting_for_darts_bet)
-async def process_darts_bet(message: Message, state: FSMContext):
-    try:
-        bet = float(message.text.replace(",", "."))
-        if bet < 0.30:
-            await message.answer("❌ Минимальная ставка 0.30 USDT")
-            return
-    except:
-        await message.answer("❌ Введите число")
-        return
+@dp.callback_query(F.data == "plane_exit")
+async def plane_exit(callback: types.CallbackQuery):
+    user_id = callback.from_user.id
     
-    data = await state.get_data()
-    coeff = data.get("coeff")
-    mode_text = data.get("mode_text")
-    win_condition = data.get("win_condition")
-    
-    conn = await asyncpg.connect(DATABASE_URL)
-    user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", message.from_user.id)
-    
-    if user["balance"] < int(bet * 100):
-        await conn.close()
-        await message.answer("❌ Недостаточно средств")
-        await state.clear()
-        return
-    
-    await conn.execute("UPDATE users SET balance = balance - $1 WHERE id = $2", int(bet * 100), message.from_user.id)
-    await conn.close()
-    
-    darts_msg = await message.reply_dice(emoji="🎯")
-    await asyncio.sleep(2)
-    value = darts_msg.dice.value
-    
-    win = value in win_condition
-    
-    if win:
-        win_amount = bet * coeff
+    if user_id in user_plane_games:
+        data = user_plane_games.pop(user_id)
+        bet = data["bet"]
+        
         conn = await asyncpg.connect(DATABASE_URL)
-        await conn.execute("UPDATE users SET balance = balance + $1, total_bet = total_bet + $2 WHERE id = $3", 
-                          int(win_amount * 100), int(bet * 100), message.from_user.id)
+        await conn.execute("UPDATE users SET balance = balance + $1 WHERE id = $2", int(bet * 100), user_id)
         await conn.close()
         
-        result_text = "🎉 <b>Победа. Поздравляем!</b>"
-        win_block = f"\n\n<blockquote>Начислено: {win_amount} USDT</blockquote>"
-        photo = FSInputFile("IMG_0770.jpeg")
-        quote = random.choice(win_quotes)
-        await log_action(message.from_user.id, "darts_win", f"Выигрыш {win_amount}$ (ставка {bet}$, режим {mode_text}, значение {value})")
-    else:
-        conn = await asyncpg.connect(DATABASE_URL)
-        await conn.execute("UPDATE users SET total_bet = total_bet + $1 WHERE id = $2", int(bet * 100), message.from_user.id)
-        await conn.close()
-        
-        result_text = "🚫 <b>Поражение. Повезет в следующий раз!</b>"
-        win_block = ""
-        photo = FSInputFile("IMG_0769.jpeg")
-        quote = random.choice(lose_quotes)
-        await log_action(message.from_user.id, "darts_lose", f"Проигрыш {bet}$ (режим {mode_text}, значение {value})")
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.answer("❌ Вы вышли из игры. Ставка возвращена.")
     
-    result_message = (
-        f"{result_text}\n\n"
-        f"<blockquote>Попадание: {value}</blockquote>\n"
-        f"<blockquote>Коэффициент: {coeff}x</blockquote>\n"
-        f"{win_block}\n"
-        f"<blockquote>{quote}</blockquote>"
-    )
-    
-    await darts_msg.reply_photo(
-        photo=photo,
-        caption=result_message,
-        parse_mode=ParseMode.HTML,
-        reply_markup=get_make_bet_inline()
-    )
-    await state.clear()
+    await callback.answer()
 
-async def show_bet_request(message, user_id, state, mode_name, coeff):
-    conn = await asyncpg.connect(DATABASE_URL)
-    user = await conn.fetchrow("SELECT balance FROM users WHERE id = $1", user_id)
-    await conn.close()
-    
-    bet_text = (
-        f"<b>💳 Введите сумму для ставки:</b>\n"
-        f"└ Текущий баланс: {user['balance']/100}$\n\n"
-        f"<blockquote>Коэффициент: {coeff}x</blockquote>\n"
-        f"<blockquote>Комиссия: 4.5%</blockquote>\n"
-        f"• Минимальная сумма ставки 0.30 USDT"
-    )
-    
-    photo = FSInputFile("IMG_0754.jpeg")
-    await message.edit_media(
-        types.InputMediaPhoto(
-            media=photo,
-            caption=bet_text,
-            parse_mode=ParseMode.HTML
-        ),
-        reply_markup=get_bet_cancel_inline()
-    )
-    await state.set_state(GameStates.waiting_for_bet)
-
-@dp.message(GameStates.waiting_for_bet)
-async def process_bet(message: Message, state: FSMContext):
-    try:
-        bet = float(message.text.replace(",", "."))
-        if bet < 0.30:
-            await message.answer("❌ Минимальная ставка 0.30 USDT")
-            return
-    except:
-        await message.answer("❌ Введите число")
-        return
-    
-    data = await state.get_data()
-    game_mode = data.get("game_mode")
-    coeff = data.get("coeff", 1.85)
-    sector = data.get("sector")
-    
-    conn = await asyncpg.connect(DATABASE_URL)
-    user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", message.from_user.id)
-    
-    if user["balance"] < int(bet * 100):
-        await conn.close()
-        await message.answer("❌ Недостаточно средств")
-        await state.clear()
-        return
-    
-    await conn.execute("UPDATE users SET balance = balance - $1 WHERE id = $2", int(bet * 100), message.from_user.id)
-    await conn.close()
-    
-    dice_msg = await message.reply_dice(emoji="🎲")
-    await asyncio.sleep(2)
-    dice_value = dice_msg.dice.value
-    
-    if game_mode == "even":
-        win = dice_value % 2 == 0
-        mode_text = "Четное"
-    elif game_mode == "odd":
-        win = dice_value % 2 == 1
-        mode_text = "Нечетное"
-    elif game_mode == "sector":
-        win = dice_value == sector
-        mode_text = f"Сектор {sector}"
-    elif game_mode == "over":
-        win = dice_value >= 4
-        mode_text = "Больше 3"
-    elif game_mode == "under":
-        win = dice_value <= 3
-        mode_text = "Меньше 4"
-    else:
-        win = False
-        mode_text = "Неизвестно"
-    
-    if win:
-        win_amount = bet * coeff
-        conn = await asyncpg.connect(DATABASE_URL)
-        await conn.execute("UPDATE users SET balance = balance + $1, total_bet = total_bet + $2 WHERE id = $3", 
-                          int(win_amount * 100), int(bet * 100), message.from_user.id)
-        await conn.close()
-        
-        result_text = "🎉 <b>Победа. Поздравляем!</b>"
-        win_text = f"\n\n<blockquote>Начислено: {win_amount} USDT</blockquote>"
-        photo = FSInputFile("IMG_0770.jpeg")
-        quote = random.choice(win_quotes)
-        await log_action(message.from_user.id, "dice_win", f"Выигрыш {win_amount}$ (ставка {bet}$, режим {mode_text}, значение {dice_value})")
-    else:
-        conn = await asyncpg.connect(DATABASE_URL)
-        await conn.execute("UPDATE users SET total_bet = total_bet + $1 WHERE id = $2", int(bet * 100), message.from_user.id)
-        await conn.close()
-        
-        result_text = "🚫 <b>Поражение. Повезет в следующий раз!</b>"
-        win_text = ""
-        photo = FSInputFile("IMG_0769.jpeg")
-        quote = random.choice(lose_quotes)
-        await log_action(message.from_user.id, "dice_lose", f"Проигрыш {bet}$ (режим {mode_text}, значение {dice_value})")
-    
-    result_message = (
-        f"{result_text}\n\n"
-        f"<blockquote>Выпало значение: {dice_value}</blockquote>\n"
-        f"<blockquote>Коэффициент: {coeff}x</blockquote>\n"
-        f"{win_text}\n"
-        f"<blockquote>{quote}</blockquote>"
-    )
-    
-    await dice_msg.reply_photo(
-        photo=photo,
-        caption=result_message,
-        parse_mode=ParseMode.HTML,
-        reply_markup=get_make_bet_inline()
-    )
-    await state.clear()
-
-@rate_limit(limit=10)
 @dp.callback_query(F.data == "make_bet")
 async def make_bet(callback: types.CallbackQuery):
     conn = await asyncpg.connect(DATABASE_URL)
@@ -938,7 +703,6 @@ async def make_bet(callback: types.CallbackQuery):
     )
     await callback.answer()
 
-@rate_limit(limit=10)
 @dp.callback_query(F.data == "cancel_bet")
 async def cancel_bet(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
