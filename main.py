@@ -525,10 +525,8 @@ async def process_bet(message: Message, state: FSMContext):
     await conn.execute("UPDATE users SET balance = balance - $1 WHERE id = $2", int(bet * 100), message.from_user.id)
     await conn.close()
     
-    await message.answer("🎲")
     await asyncio.sleep(1)
-    
-    dice_msg = await bot.send_dice(chat_id=message.chat.id, emoji="🎲")
+    dice_msg = await message.reply_dice(emoji="🎲")
     dice_value = dice_msg.dice.value
     
     if game_mode == "even":
@@ -578,7 +576,7 @@ async def process_bet(message: Message, state: FSMContext):
         f"<blockquote>{quote}</blockquote>"
     )
     
-    await message.answer_photo(
+    await dice_msg.reply_photo(
         photo=photo,
         caption=result_message,
         parse_mode=ParseMode.HTML,
