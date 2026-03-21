@@ -8,17 +8,19 @@ import logging
 logging.basicConfig(level=logging.INFO)
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise ValueError("Токен не найден!")
+
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher()
 
-@dp.message(Command("dice"))
-async def dice_cmd(message: Message):
-    await message.answer_dice(emoji="🎲")
-
-@dp.message(F.dice)
-async def dice_result(message: Message):
-    logging.info(f"Dice received: {message.dice.value}")
-    await message.reply(f"🎲 Выпало: {message.dice.value}")
+@dp.message(Command("start"))
+async def start(message: Message):
+    await message.answer("Кидаю кубик...")
+    dice_msg = await bot.send_dice(chat_id=message.chat.id, emoji="🎲")
+    value = dice_msg.dice.value
+    await asyncio.sleep(2)
+    await message.answer(f"🎲 Выпало: {value}")
 
 async def main():
     await dp.start_polling(bot)
