@@ -31,6 +31,7 @@ bot = Bot(token=TOKEN)
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
+dp.update.allow_update_without_chat = True  # ← ЭТО КЛЮЧЕВОЕ!
 # ============ ГЛОБАЛЬНЫЕ ПЕРЕМЕННЫЕ ============
 user_invoice_messages = {}
 rate_limit_dict = defaultdict(list)
