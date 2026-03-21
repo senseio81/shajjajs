@@ -536,7 +536,7 @@ async def process_bet(message: Message, state: FSMContext):
     
     await message.answer_dice(emoji="🎲")
 
-@dp.message(F.content_type == "dice")
+@dp.message(F.dice)
 async def handle_dice(message: Message):
     user_id = message.from_user.id
     logging.info(f"Dice received from {user_id}, value: {message.dice.value}")
