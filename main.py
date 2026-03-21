@@ -1884,7 +1884,7 @@ async def top_month(message: Message):
     medals = ["🥇", "🥈", "🥉", "🏅", "🏅", "🏅", "🏅", "🏅", "🏅", "🏅"]
     
     top_text = f"<b>🤑 Топ игроков за месяц:</b>\n\n"
-    
+    #
     for i, user in enumerate(top_users):
         user_id = user["user_id"]
         total = user["total"] / 100
