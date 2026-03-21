@@ -555,10 +555,10 @@ async def bowling_mode_selected(callback: types.CallbackQuery, state: FSMContext
         coeff = 1.45
         mode_text = "Больше 3 кеглей"
     elif mode == "under":
-        coeff = 1.45
+        coeff = 3.20
         mode_text = "Меньше 4 кеглей"
     elif mode == "strike":
-        coeff = 2.25
+        coeff = 9.0
         mode_text = "Страйк"
     else:
         return
@@ -595,19 +595,19 @@ async def darts_mode_selected(callback: types.CallbackQuery, state: FSMContext):
     mode = callback.data.split("_")[1]
     
     if mode == "red":
-        coeff = 1.85
+        coeff = 2.2
         mode_text = "Красный сектор"
         win_condition = [1, 2]
     elif mode == "white":
-        coeff = 1.85
+        coeff = 2.2
         mode_text = "Белый сектор"
         win_condition = [3, 4]
     elif mode == "center":
-        coeff = 2.70
+        coeff = 5.5
         mode_text = "Центр"
         win_condition = [5]
     elif mode == "bounce":
-        coeff = 5.0
+        coeff = 5.5
         mode_text = "Отскок"
         win_condition = [6]
     else:
