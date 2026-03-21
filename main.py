@@ -542,7 +542,7 @@ async def process_bet(message: Message, state: FSMContext):
     logging.info("Sending dice...")
     await message.answer_dice(emoji="🎲")
     logging.info("Dice sent")
-    
+
 @dp.message(F.dice)
 async def handle_dice(message: Message):
     user_id = message.from_user.id
