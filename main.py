@@ -8,6 +8,7 @@ from io import StringIO
 from collections import defaultdict
 import time
 
+from aiogram.filters import ContentTypeFilter
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import Message, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
@@ -543,7 +544,9 @@ async def process_bet(message: Message, state: FSMContext):
     await message.answer_dice(emoji="🎲")
     logging.info("Dice sent")
 
-@dp.message(F.dice)
+from aiogram.filters import ContentTypeFilter
+
+@dp.message(ContentTypeFilter(types.ContentType.DICE))
 async def handle_dice(message: Message):
     user_id = message.from_user.id
     logging.info(f"Dice received from {user_id}, value: {message.dice.value}")
