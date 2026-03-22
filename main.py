@@ -3,7 +3,7 @@ import logging
 import os
 import aiohttp
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import StringIO
 from collections import defaultdict
 import time
@@ -345,23 +345,87 @@ def generate_crash():
     else:
         return round(random.uniform(50.01, 100.00), 2)
 
+async def get_user_stats(user_id: int):
+    conn = await asyncpg.connect(DATABASE_URL)
+    
+    # Всего игр
+    total_games = await conn.fetchval("SELECT COUNT(*) FROM logs WHERE user_id = $1 AND action IN ('dice_win', 'dice_lose', 'bowling_win', 'bowling_lose', 'darts_win', 'darts_lose', 'plane_win', 'plane_lose')", user_id) or 0
+    
+    # Избранная игра
+    favorite = await conn.fetchrow("""
+        SELECT 
+            CASE 
+                WHEN action LIKE 'dice%' THEN '🎲 Кубик'
+                WHEN action LIKE 'bowling%' THEN '🎳 Боулинг'
+                WHEN action LIKE 'darts%' THEN '🎯 Дартс'
+                WHEN action LIKE 'plane%' THEN '🚀 Ракетка'
+            END as game,
+            COUNT(*) as count
+        FROM logs 
+        WHERE user_id = $1 AND action IN ('dice_win', 'dice_lose', 'bowling_win', 'bowling_lose', 'darts_win', 'darts_lose', 'plane_win', 'plane_lose')
+        GROUP BY game
+        ORDER BY count DESC
+        LIMIT 1
+    """, user_id)
+    favorite_game = favorite["game"] if favorite else "—"
+    
+    # Максимальный выигрыш
+    max_win = await conn.fetchval("""
+        SELECT MAX(CAST(split_part(details, 'Выигрыш ', 2) AS FLOAT))
+        FROM logs 
+        WHERE user_id = $1 AND action IN ('dice_win', 'bowling_win', 'darts_win', 'plane_win')
+    """, user_id) or 0
+    
+    # Оборот
+    total_bet = await conn.fetchval("SELECT total_bet FROM users WHERE id = $1", user_id) or 0
+    
+    await conn.close()
+    
+    return total_games, favorite_game, max_win, total_bet
+
+async def show_user_profile(message: Message, target_user_id: int):
+    conn = await asyncpg.connect(DATABASE_URL)
+    user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", target_user_id)
+    await conn.close()
+    
+    if not user:
+        await message.answer("❌ Пользователь не найден")
+        return
+    
+    username = user["username"] if user["username"] else f"ID:{target_user_id}"
+    total_games, favorite_game, max_win, total_bet = await get_user_stats(target_user_id)
+    
+    profile_text = (
+        f"<b>👤 Пользователь › {username}</b>\n"
+        f" ├ Всего игр: {total_games} шт.\n"
+        f" ├ Избранное: {favorite_game}\n"
+        f" └ Максимальный вин: {max_win:.2f}$\n\n"
+        f"<b>💸 Оборот: {total_bet/100:.2f}$</b>"
+    )
+    
+    await message.answer(profile_text, parse_mode=ParseMode.HTML)
+
 @dp.message(Command("start"))
 async def start_command(message: Message):
     args = message.text.split()
-    referrer_id = None
-    if len(args) > 1:
+    
+    # Проверяем, есть ли параметр user_123
+    if len(args) > 1 and args[1].startswith("user_"):
         try:
-            referrer_id = int(args[1])
+            target_user_id = int(args[1].split("_")[1])
+            await show_user_profile(message, target_user_id)
+            return
         except:
             pass
     
+    # Обычная регистрация нового пользователя
     conn = await asyncpg.connect(DATABASE_URL)
     
     user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", message.from_user.id)
     if not user:
         await conn.execute("""
-            INSERT INTO users (id, username, referrer_id) VALUES ($1, $2, $3)
-        """, message.from_user.id, message.from_user.username, referrer_id)
+            INSERT INTO users (id, username) VALUES ($1, $2)
+        """, message.from_user.id, message.from_user.username)
         await log_action(message.from_user.id, "start", "Регистрация в боте")
     
     await conn.close()
@@ -1742,17 +1806,15 @@ async def top_all_time(message: Message):
     conn = await asyncpg.connect(DATABASE_URL)
     
     query = """
-        SELECT user_id, SUM(amount) as total 
-        FROM withdraw_requests 
-        WHERE status = 'approved'
-        GROUP BY user_id 
-        ORDER BY total DESC 
+        SELECT id, username, total_bet 
+        FROM users 
+        WHERE total_bet > 0
+        ORDER BY total_bet DESC 
         LIMIT 10
     """
     
-    turnover = await conn.fetchval("SELECT SUM(amount) FROM withdraw_requests WHERE status = 'approved'") or 0
-    
     top_users = await conn.fetch(query)
+    total_turnover = await conn.fetchval("SELECT SUM(total_bet) FROM users") or 0
     await conn.close()
     
     medals = ["🥇", "🥈", "🥉", "🏅", "🏅", "🏅", "🏅", "🏅", "🏅", "🏅"]
@@ -1760,19 +1822,14 @@ async def top_all_time(message: Message):
     top_text = f"<b>🤑 Топ игроков всё время:</b>\n\n"
     
     for i, user in enumerate(top_users):
-        user_id = user["user_id"]
-        total = user["total"] / 100
-        
-        conn = await asyncpg.connect(DATABASE_URL)
-        username = await conn.fetchval("SELECT username FROM users WHERE id = $1", user_id)
-        await conn.close()
-        
-        display_name = username if username else f"ID:{user_id}"
+        user_id = user["id"]
+        total_bet = user["total_bet"] / 100
+        username = user["username"] if user["username"] else f"ID:{user_id}"
         medal = medals[i] if i < len(medals) else "🏅"
         
-        top_text += f"{medal} <b><a href=\"https://t.me/Hot_dicebot?start=user_{user_id}\">{display_name}</a></b> - <b>{total:.2f}$</b>\n"
+        top_text += f"{medal} <b><a href=\"https://t.me/Hot_dicebot?start=user_{user_id}\">{username}</a></b> - <b>{total_bet:.2f}$</b>\n"
     
-    top_text += f"\n<b>💸 Оборот всё время: {turnover/100:.2f}$</b>"
+    top_text += f"\n<b>💸 Оборот всё время: {total_turnover/100:.2f}$</b>"
     
     await message.answer(top_text, parse_mode=ParseMode.HTML)
 
@@ -1783,18 +1840,19 @@ async def top_day(message: Message):
     
     conn = await asyncpg.connect(DATABASE_URL)
     
+    today = datetime.now().date()
+    
     query = """
         SELECT user_id, SUM(amount) as total 
         FROM withdraw_requests 
-        WHERE status = 'approved' AND processed_at >= CURRENT_DATE
+        WHERE status = 'approved' AND processed_at::date = $1
         GROUP BY user_id 
         ORDER BY total DESC 
         LIMIT 10
     """
     
-    turnover = await conn.fetchval("SELECT SUM(amount) FROM withdraw_requests WHERE status = 'approved' AND processed_at >= CURRENT_DATE") or 0
-    
-    top_users = await conn.fetch(query)
+    top_users = await conn.fetch(query, today)
+    total_turnover = await conn.fetchval("SELECT SUM(amount) FROM withdraw_requests WHERE status = 'approved' AND processed_at::date = $1", today) or 0
     await conn.close()
     
     medals = ["🥇", "🥈", "🥉", "🏅", "🏅", "🏅", "🏅", "🏅", "🏅", "🏅"]
@@ -1805,16 +1863,16 @@ async def top_day(message: Message):
         user_id = user["user_id"]
         total = user["total"] / 100
         
-        conn = await asyncpg.connect(DATABASE_URL)
-        username = await conn.fetchval("SELECT username FROM users WHERE id = $1", user_id)
-        await conn.close()
+        conn2 = await asyncpg.connect(DATABASE_URL)
+        username = await conn2.fetchval("SELECT username FROM users WHERE id = $1", user_id)
+        await conn2.close()
         
         display_name = username if username else f"ID:{user_id}"
         medal = medals[i] if i < len(medals) else "🏅"
         
         top_text += f"{medal} <b><a href=\"https://t.me/Hot_dicebot?start=user_{user_id}\">{display_name}</a></b> - <b>{total:.2f}$</b>\n"
     
-    top_text += f"\n<b>💸 Оборот сегодня: {turnover/100:.2f}$</b>"
+    top_text += f"\n<b>💸 Оборот сегодня: {total_turnover/100:.2f}$</b>"
     
     await message.answer(top_text, parse_mode=ParseMode.HTML)
 
@@ -1825,18 +1883,19 @@ async def top_week(message: Message):
     
     conn = await asyncpg.connect(DATABASE_URL)
     
+    week_ago = datetime.now() - timedelta(days=7)
+    
     query = """
         SELECT user_id, SUM(amount) as total 
         FROM withdraw_requests 
-        WHERE status = 'approved' AND processed_at >= CURRENT_DATE - INTERVAL '7 days'
+        WHERE status = 'approved' AND processed_at >= $1
         GROUP BY user_id 
         ORDER BY total DESC 
         LIMIT 10
     """
     
-    turnover = await conn.fetchval("SELECT SUM(amount) FROM withdraw_requests WHERE status = 'approved' AND processed_at >= CURRENT_DATE - INTERVAL '7 days'") or 0
-    
-    top_users = await conn.fetch(query)
+    top_users = await conn.fetch(query, week_ago)
+    total_turnover = await conn.fetchval("SELECT SUM(amount) FROM withdraw_requests WHERE status = 'approved' AND processed_at >= $1", week_ago) or 0
     await conn.close()
     
     medals = ["🥇", "🥈", "🥉", "🏅", "🏅", "🏅", "🏅", "🏅", "🏅", "🏅"]
@@ -1847,16 +1906,16 @@ async def top_week(message: Message):
         user_id = user["user_id"]
         total = user["total"] / 100
         
-        conn = await asyncpg.connect(DATABASE_URL)
-        username = await conn.fetchval("SELECT username FROM users WHERE id = $1", user_id)
-        await conn.close()
+        conn2 = await asyncpg.connect(DATABASE_URL)
+        username = await conn2.fetchval("SELECT username FROM users WHERE id = $1", user_id)
+        await conn2.close()
         
         display_name = username if username else f"ID:{user_id}"
         medal = medals[i] if i < len(medals) else "🏅"
         
         top_text += f"{medal} <b><a href=\"https://t.me/Hot_dicebot?start=user_{user_id}\">{display_name}</a></b> - <b>{total:.2f}$</b>\n"
     
-    top_text += f"\n<b>💸 Оборот за неделю: {turnover/100:.2f}$</b>"
+    top_text += f"\n<b>💸 Оборот за неделю: {total_turnover/100:.2f}$</b>"
     
     await message.answer(top_text, parse_mode=ParseMode.HTML)
 
@@ -1867,38 +1926,39 @@ async def top_month(message: Message):
     
     conn = await asyncpg.connect(DATABASE_URL)
     
+    month_ago = datetime.now() - timedelta(days=30)
+    
     query = """
         SELECT user_id, SUM(amount) as total 
         FROM withdraw_requests 
-        WHERE status = 'approved' AND processed_at >= CURRENT_DATE - INTERVAL '30 days'
+        WHERE status = 'approved' AND processed_at >= $1
         GROUP BY user_id 
         ORDER BY total DESC 
         LIMIT 10
     """
     
-    turnover = await conn.fetchval("SELECT SUM(amount) FROM withdraw_requests WHERE status = 'approved' AND processed_at >= CURRENT_DATE - INTERVAL '30 days'") or 0
-    
-    top_users = await conn.fetch(query)
+    top_users = await conn.fetch(query, month_ago)
+    total_turnover = await conn.fetchval("SELECT SUM(amount) FROM withdraw_requests WHERE status = 'approved' AND processed_at >= $1", month_ago) or 0
     await conn.close()
     
     medals = ["🥇", "🥈", "🥉", "🏅", "🏅", "🏅", "🏅", "🏅", "🏅", "🏅"]
     
     top_text = f"<b>🤑 Топ игроков за месяц:</b>\n\n"
-    #
+    
     for i, user in enumerate(top_users):
         user_id = user["user_id"]
         total = user["total"] / 100
         
-        conn = await asyncpg.connect(DATABASE_URL)
-        username = await conn.fetchval("SELECT username FROM users WHERE id = $1", user_id)
-        await conn.close()
+        conn2 = await asyncpg.connect(DATABASE_URL)
+        username = await conn2.fetchval("SELECT username FROM users WHERE id = $1", user_id)
+        await conn2.close()
         
         display_name = username if username else f"ID:{user_id}"
         medal = medals[i] if i < len(medals) else "🏅"
         
         top_text += f"{medal} <b><a href=\"https://t.me/Hot_dicebot?start=user_{user_id}\">{display_name}</a></b> - <b>{total:.2f}$</b>\n"
     
-    top_text += f"\n<b>💸 Оборот за месяц: {turnover/100:.2f}$</b>"
+    top_text += f"\n<b>💸 Оборот за месяц: {total_turnover/100:.2f}$</b>"
     
     await message.answer(top_text, parse_mode=ParseMode.HTML)
 
