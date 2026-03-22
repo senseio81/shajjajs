@@ -1168,20 +1168,9 @@ async def process_bet(message: Message, state: FSMContext):
         await state.clear()
         return
     
+    referrer_id = user["referrer_id"]
+    
     await conn.execute("UPDATE users SET balance = balance - $1 WHERE id = $2", int(bet * 100), message.from_user.id)
-    
-    # Реферальная система (начисление рефереру при проигрыше)
-    if not win:
-        user = await conn.fetchrow("SELECT referrer_id FROM users WHERE id = $1", message.from_user.id)
-        if user and user["referrer_id"]:
-            referrer_id = user["referrer_id"]
-            bonus = bet * 0.05  # 5%
-            await conn.execute("""
-                UPDATE users SET balance = balance + $1, referral_earnings = referral_earnings + $1 
-                WHERE id = $2
-            """, int(bonus * 100), referrer_id)
-            await log_action(referrer_id, "referral_bonus", f"Бонус {bonus}$ от проигрыша реферала {message.from_user.id}")
-    
     await conn.close()
     
     dice_msg = await message.reply_dice(emoji="🎲")
@@ -1222,6 +1211,15 @@ async def process_bet(message: Message, state: FSMContext):
     else:
         conn = await asyncpg.connect(DATABASE_URL)
         await conn.execute("UPDATE users SET total_bet = total_bet + $1 WHERE id = $2", int(bet * 100), message.from_user.id)
+        
+        if referrer_id:
+            bonus = bet * 0.05
+            await conn.execute("""
+                UPDATE users SET balance = balance + $1, referral_earnings = referral_earnings + $1 
+                WHERE id = $2
+            """, int(bonus * 100), referrer_id)
+            await log_action(referrer_id, "referral_bonus", f"Бонус {bonus}$ от проигрыша реферала {message.from_user.id}")
+        
         await conn.close()
         
         result_text = "🚫 <b>Поражение. Повезет в следующий раз!</b>"
