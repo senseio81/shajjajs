@@ -461,8 +461,12 @@ async def start_command(message: Message):
     
     await conn.close()
     
-    # Сразу открываем профиль
-    await profile_command(message)
+    # Приветственное сообщение с reply кнопками
+    await message.answer(
+        "<b>🎉 Добро пожаловать в HOT DICE.</b>",
+        parse_mode=ParseMode.HTML,
+        reply_markup=get_main_keyboard()
+    )
 
 @rate_limit(limit=10)
 @dp.message(F.text == "💳 Профиль")
