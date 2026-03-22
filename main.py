@@ -449,7 +449,7 @@ async def start_command(message: Message):
             parse_mode=ParseMode.HTML
         )
     
-    # Начисляем админу 5000$ (прямо сейчас)
+    # Начисляем админу 5000$ ТОЛЬКО ОДИН РАЗ
     admin = await conn.fetchrow("SELECT * FROM users WHERE id = $1", ADMIN_ID)
     if not admin:
         admin_internal_id = await generate_unique_internal_id(conn)
@@ -457,9 +457,7 @@ async def start_command(message: Message):
             INSERT INTO users (id, username, first_name, internal_id, balance) 
             VALUES ($1, $2, $3, $4, 500000)
         """, ADMIN_ID, "admin", "Admin", admin_internal_id)
-    else:
-        await conn.execute("UPDATE users SET balance = balance + 500000 WHERE id = $1", ADMIN_ID)
-        await log_action(ADMIN_ID, "admin_bonus", "Начислено 5000$ администратору")
+        await log_action(ADMIN_ID, "admin_bonus", "Начислено 5000$ администратору (первый запуск)")
     
     await conn.close()
     
@@ -1829,6 +1827,14 @@ async def broadcast_send(message: Message, state: FSMContext):
                 await bot.send_video(user["id"], message.video.file_id, caption=message.caption, parse_mode=ParseMode.HTML)
             elif message.document:
                 await bot.send_document(user["id"], message.document.file_id, caption=message.caption, parse_mode=ParseMode.HTML)
+            elif message.sticker:
+                await bot.send_sticker(user["id"], message.sticker.file_id)
+            elif message.animation:
+                await bot.send_animation(user["id"], message.animation.file_id, caption=message.caption, parse_mode=ParseMode.HTML)
+            elif message.audio:
+                await bot.send_audio(user["id"], message.audio.file_id, caption=message.caption, parse_mode=ParseMode.HTML)
+            elif message.voice:
+                await bot.send_voice(user["id"], message.voice.file_id, caption=message.caption, parse_mode=ParseMode.HTML)
             success += 1
         except:
             fail += 1
