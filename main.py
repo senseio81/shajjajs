@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from io import StringIO
 from collections import defaultdict
 import time
+import re
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -102,7 +103,9 @@ async def init_db():
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id BIGINT PRIMARY KEY,
+            internal_id SERIAL UNIQUE,
             username TEXT,
+            first_name TEXT,
             balance INTEGER DEFAULT 0,
             total_bet INTEGER DEFAULT 0,
             registered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -388,11 +391,11 @@ async def show_user_profile(message: Message, target_user_id: int):
         await message.answer("❌ Пользователь не найден")
         return
     
-    username = user["username"] if user["username"] else f"ID:{target_user_id}"
+    display_name = user["first_name"] if user["first_name"] else "Secret User"
     total_games, favorite_game, max_win, total_bet = await get_user_stats(target_user_id)
     
     profile_text = (
-        f"<b>👤 Пользователь › {username}</b>\n"
+        f"<b>👤 Пользователь › {display_name}</b>\n"
         f" ├ Всего игр: {total_games} шт.\n"
         f" ├ Избранное: {favorite_game}\n"
         f" └ Максимальный вин: {max_win:.2f}$\n\n"
@@ -403,25 +406,30 @@ async def show_user_profile(message: Message, target_user_id: int):
 
 @dp.message(Command("start"))
 async def start_command(message: Message):
-    args = message.text.split()
-    
-    if len(args) > 1 and args[1].startswith("user_"):
+    text = message.text
+    match = re.search(r"user_(\d+)", text)
+    if match:
         try:
-            target_user_id = int(args[1].split("_")[1])
-            await show_user_profile(message, target_user_id)
-            return
+            internal_id = int(match.group(1))
+            conn = await asyncpg.connect(DATABASE_URL)
+            user = await conn.fetchrow("SELECT * FROM users WHERE internal_id = $1", internal_id)
+            await conn.close()
+            if user:
+                await show_user_profile(message, user["id"])
+                return
+            else:
+                await message.answer("❌ Пользователь не найден")
+                return
         except:
             pass
     
     conn = await asyncpg.connect(DATABASE_URL)
-    
     user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", message.from_user.id)
     if not user:
         await conn.execute("""
-            INSERT INTO users (id, username) VALUES ($1, $2)
-        """, message.from_user.id, message.from_user.username)
+            INSERT INTO users (id, username, first_name) VALUES ($1, $2, $3)
+        """, message.from_user.id, message.from_user.username, message.from_user.first_name)
         await log_action(message.from_user.id, "start", "Регистрация в боте")
-    
     await conn.close()
     
     await message.answer(
@@ -1800,7 +1808,7 @@ async def top_all_time(message: Message):
     conn = await asyncpg.connect(DATABASE_URL)
     
     query = """
-        SELECT id, username, total_bet 
+        SELECT id, internal_id, first_name, total_bet 
         FROM users 
         WHERE total_bet > 0
         ORDER BY total_bet DESC 
@@ -1816,12 +1824,12 @@ async def top_all_time(message: Message):
     top_text = f"<b>🤑 Топ игроков всё время:</b>\n\n"
     
     for i, user in enumerate(top_users):
-        user_id = user["id"]
+        internal_id = user["internal_id"]
         total_bet = user["total_bet"] / 100
-        username = user["username"] if user["username"] else f"ID:{user_id}"
+        display_name = user["first_name"] if user["first_name"] else "Secret User"
         medal = medals[i] if i < len(medals) else "🏅"
         
-        top_text += f"{medal} <b><a href=\"https://t.me/Hot_dicebot?start=user_{user_id}\">{username}</a></b> - <b>{total_bet:.2f}$</b>\n"
+        top_text += f"{medal} <b><a href=\"https://t.me/Hot_dicebot?start=user_{internal_id}\">{display_name}</a></b> - <b>{total_bet:.2f}$</b>\n"
     
     top_text += f"\n<b>💸 Оборот всё время: {total_turnover/100:.2f}$</b>"
     
@@ -1837,10 +1845,11 @@ async def top_day(message: Message):
     today = datetime.now().date()
     
     query = """
-        SELECT user_id, SUM(amount) as total 
-        FROM withdraw_requests 
-        WHERE status = 'approved' AND processed_at::date = $1
-        GROUP BY user_id 
+        SELECT u.id, u.internal_id, u.first_name, SUM(w.amount) as total
+        FROM withdraw_requests w
+        JOIN users u ON w.user_id = u.id
+        WHERE w.status = 'approved' AND w.processed_at::date = $1
+        GROUP BY u.id, u.internal_id, u.first_name
         ORDER BY total DESC 
         LIMIT 10
     """
@@ -1854,17 +1863,12 @@ async def top_day(message: Message):
     top_text = f"<b>🤑 Топ игроков сегодня:</b>\n\n"
     
     for i, user in enumerate(top_users):
-        user_id = user["user_id"]
+        internal_id = user["internal_id"]
         total = user["total"] / 100
-        
-        conn2 = await asyncpg.connect(DATABASE_URL)
-        username = await conn2.fetchval("SELECT username FROM users WHERE id = $1", user_id)
-        await conn2.close()
-        
-        display_name = username if username else f"ID:{user_id}"
+        display_name = user["first_name"] if user["first_name"] else "Secret User"
         medal = medals[i] if i < len(medals) else "🏅"
         
-        top_text += f"{medal} <b><a href=\"https://t.me/Hot_dicebot?start=user_{user_id}\">{display_name}</a></b> - <b>{total:.2f}$</b>\n"
+        top_text += f"{medal} <b><a href=\"https://t.me/Hot_dicebot?start=user_{internal_id}\">{display_name}</a></b> - <b>{total:.2f}$</b>\n"
     
     top_text += f"\n<b>💸 Оборот сегодня: {total_turnover/100:.2f}$</b>"
     
@@ -1880,10 +1884,11 @@ async def top_week(message: Message):
     week_ago = datetime.now() - timedelta(days=7)
     
     query = """
-        SELECT user_id, SUM(amount) as total 
-        FROM withdraw_requests 
-        WHERE status = 'approved' AND processed_at >= $1
-        GROUP BY user_id 
+        SELECT u.id, u.internal_id, u.first_name, SUM(w.amount) as total
+        FROM withdraw_requests w
+        JOIN users u ON w.user_id = u.id
+        WHERE w.status = 'approved' AND w.processed_at >= $1
+        GROUP BY u.id, u.internal_id, u.first_name
         ORDER BY total DESC 
         LIMIT 10
     """
@@ -1897,17 +1902,12 @@ async def top_week(message: Message):
     top_text = f"<b>🤑 Топ игроков за неделю:</b>\n\n"
     
     for i, user in enumerate(top_users):
-        user_id = user["user_id"]
+        internal_id = user["internal_id"]
         total = user["total"] / 100
-        
-        conn2 = await asyncpg.connect(DATABASE_URL)
-        username = await conn2.fetchval("SELECT username FROM users WHERE id = $1", user_id)
-        await conn2.close()
-        
-        display_name = username if username else f"ID:{user_id}"
+        display_name = user["first_name"] if user["first_name"] else "Secret User"
         medal = medals[i] if i < len(medals) else "🏅"
         
-        top_text += f"{medal} <b><a href=\"https://t.me/Hot_dicebot?start=user_{user_id}\">{display_name}</a></b> - <b>{total:.2f}$</b>\n"
+        top_text += f"{medal} <b><a href=\"https://t.me/Hot_dicebot?start=user_{internal_id}\">{display_name}</a></b> - <b>{total:.2f}$</b>\n"
     
     top_text += f"\n<b>💸 Оборот за неделю: {total_turnover/100:.2f}$</b>"
     
@@ -1923,10 +1923,11 @@ async def top_month(message: Message):
     month_ago = datetime.now() - timedelta(days=30)
     
     query = """
-        SELECT user_id, SUM(amount) as total 
-        FROM withdraw_requests 
-        WHERE status = 'approved' AND processed_at >= $1
-        GROUP BY user_id 
+        SELECT u.id, u.internal_id, u.first_name, SUM(w.amount) as total
+        FROM withdraw_requests w
+        JOIN users u ON w.user_id = u.id
+        WHERE w.status = 'approved' AND w.processed_at >= $1
+        GROUP BY u.id, u.internal_id, u.first_name
         ORDER BY total DESC 
         LIMIT 10
     """
@@ -1940,17 +1941,12 @@ async def top_month(message: Message):
     top_text = f"<b>🤑 Топ игроков за месяц:</b>\n\n"
     
     for i, user in enumerate(top_users):
-        user_id = user["user_id"]
+        internal_id = user["internal_id"]
         total = user["total"] / 100
-        
-        conn2 = await asyncpg.connect(DATABASE_URL)
-        username = await conn2.fetchval("SELECT username FROM users WHERE id = $1", user_id)
-        await conn2.close()
-        
-        display_name = username if username else f"ID:{user_id}"
+        display_name = user["first_name"] if user["first_name"] else "Secret User"
         medal = medals[i] if i < len(medals) else "🏅"
         
-        top_text += f"{medal} <b><a href=\"https://t.me/Hot_dicebot?start=user_{user_id}\">{display_name}</a></b> - <b>{total:.2f}$</b>\n"
+        top_text += f"{medal} <b><a href=\"https://t.me/Hot_dicebot?start=user_{internal_id}\">{display_name}</a></b> - <b>{total:.2f}$</b>\n"
     
     top_text += f"\n<b>💸 Оборот за месяц: {total_turnover/100:.2f}$</b>"
     
