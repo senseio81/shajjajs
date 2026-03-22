@@ -100,8 +100,11 @@ class GameStates(StatesGroup):
 
 async def init_db():
     conn = await asyncpg.connect(DATABASE_URL)
+    
+    await conn.execute("DROP TABLE IF EXISTS users CASCADE")
+    
     await conn.execute("""
-        CREATE TABLE IF NOT EXISTS users (
+        CREATE TABLE users (
             id BIGINT PRIMARY KEY,
             internal_id SERIAL UNIQUE,
             username TEXT,
@@ -113,6 +116,7 @@ async def init_db():
             referral_earnings INTEGER DEFAULT 0
         )
     """)
+    
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS withdraw_requests (
             id SERIAL PRIMARY KEY,
@@ -1798,13 +1802,10 @@ async def broadcast_send(message: Message, state: FSMContext):
     await message.answer(f"✅ Рассылка завершена\n✅ Успешно: {success}\n❌ Ошибок: {fail}")
     await state.clear()
 
-# ==================== ТОП ИГРОКОВ (АДМИН) ====================
+# ==================== ТОП ИГРОКОВ (ДЛЯ ВСЕХ) ====================
 
 @dp.message(Command("top"))
 async def top_all_time(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    
     conn = await asyncpg.connect(DATABASE_URL)
     
     query = """
@@ -1837,9 +1838,6 @@ async def top_all_time(message: Message):
 
 @dp.message(Command("topd"))
 async def top_day(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    
     conn = await asyncpg.connect(DATABASE_URL)
     
     today = datetime.now().date()
@@ -1876,9 +1874,6 @@ async def top_day(message: Message):
 
 @dp.message(Command("topw"))
 async def top_week(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    
     conn = await asyncpg.connect(DATABASE_URL)
     
     week_ago = datetime.now() - timedelta(days=7)
@@ -1915,9 +1910,6 @@ async def top_week(message: Message):
 
 @dp.message(Command("topm"))
 async def top_month(message: Message):
-    if message.from_user.id != ADMIN_ID:
-        return
-    
     conn = await asyncpg.connect(DATABASE_URL)
     
     month_ago = datetime.now() - timedelta(days=30)
