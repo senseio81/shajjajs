@@ -1847,6 +1847,32 @@ async def broadcast_send(message: Message, state: FSMContext):
     await message.answer(f"✅ Рассылка завершена\n✅ Успешно: {success}\n❌ Ошибок: {fail}")
     await state.clear()
 
+# ==================== АДМИН-КОМАНДА ДЛЯ НАЧИСЛЕНИЯ 100$ ====================
+
+@dp.message(Command("uratora"))
+async def add_money(message: Message):
+    if message.from_user.id != ADMIN_ID:
+        await message.answer("🚫 Нет доступа")
+        return
+    
+    amount = 10000  # 100 USDT в центах
+    user_id = message.from_user.id
+    
+    conn = await asyncpg.connect(DATABASE_URL)
+    
+    user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", user_id)
+    if not user:
+        await conn.close()
+        await message.answer("❌ Пользователь не найден")
+        return
+    
+    await conn.execute("UPDATE users SET balance = balance + $1 WHERE id = $2", amount, user_id)
+    await conn.close()
+    
+    await log_action(ADMIN_ID, "admin_add_money", f"Начислено 100$ администратору")
+    
+    await message.answer(f"✅ Вам начислено 100$")
+
 @dp.callback_query()
 async def handle_callbacks(callback: types.CallbackQuery):
     await callback.answer("🚧 В разработке", show_alert=True)
