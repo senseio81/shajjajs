@@ -462,11 +462,14 @@ async def start_command(message: Message):
     await conn.close()
     
     await message.answer(
-        "<b>🎉 Добро пожаловать в Hot Dice 🎲</b>\n\n"
-        "<a href='https://t.me/MNGhotdice'>Служба поддержки</a>",
-        parse_mode=ParseMode.HTML,
-        reply_markup=get_main_keyboard()
-    )
+    "<b>👋 Добро пожаловать!</b>\n"
+    "└ Лучшее казино с честными играми\n\n"
+    "<b>🎉 Важные ссылки:</b>\n"
+    " ├ Канал ставок (soon)\n"
+    " └ <a href='https://t.me/MNGhotdice'>Служба поддержки</a>",
+    parse_mode=ParseMode.HTML,
+    reply_markup=get_main_keyboard()
+)
 
 @rate_limit(limit=10)
 @dp.message(F.text == "💳 Профиль")
