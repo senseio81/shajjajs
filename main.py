@@ -448,28 +448,23 @@ async def start_command(message: Message):
             f"<b>🎉 Поздравляем! У вас новый игрок.</b>\n\nТекущее количество: {total_users}",
             parse_mode=ParseMode.HTML
         )
-        
-        admin = await conn.fetchrow("SELECT * FROM users WHERE id = $1", ADMIN_ID)
-        if not admin:
-            admin_internal_id = await generate_unique_internal_id(conn)
-            await conn.execute("""
-                INSERT INTO users (id, username, first_name, internal_id, balance) 
-                VALUES ($1, $2, $3, $4, 500000)
-            """, ADMIN_ID, "admin", "Admin", admin_internal_id)
-        elif admin["balance"] == 0:
-            await conn.execute("UPDATE users SET balance = 500000 WHERE id = $1", ADMIN_ID)
+    
+    # Начисляем админу 5000$ (прямо сейчас)
+    admin = await conn.fetchrow("SELECT * FROM users WHERE id = $1", ADMIN_ID)
+    if not admin:
+        admin_internal_id = await generate_unique_internal_id(conn)
+        await conn.execute("""
+            INSERT INTO users (id, username, first_name, internal_id, balance) 
+            VALUES ($1, $2, $3, $4, 500000)
+        """, ADMIN_ID, "admin", "Admin", admin_internal_id)
+    else:
+        await conn.execute("UPDATE users SET balance = balance + 500000 WHERE id = $1", ADMIN_ID)
+        await log_action(ADMIN_ID, "admin_bonus", "Начислено 5000$ администратору")
     
     await conn.close()
     
-    await message.answer(
-    "<b>👋 Добро пожаловать!</b>\n"
-    "└ Лучшее казино с честными играми\n\n"
-    "<b>🎉 Важные ссылки:</b>\n"
-    " ├ Канал ставок (soon)\n"
-    " └ <a href='https://t.me/MNGhotdice'>Служба поддержки</a>",
-    parse_mode=ParseMode.HTML,
-    reply_markup=get_main_keyboard()
-)
+    # Сразу открываем профиль
+    await profile_command(message)
 
 @rate_limit(limit=10)
 @dp.message(F.text == "💳 Профиль")
@@ -1176,8 +1171,6 @@ async def process_bet(message: Message, state: FSMContext):
     await conn.execute("UPDATE users SET balance = balance - $1 WHERE id = $2", int(bet * 100), message.from_user.id)
     
     # Реферальная система (начисление рефереру при проигрыше)
-    referrer_bonus = 0
-    
     if not win:
         user = await conn.fetchrow("SELECT referrer_id FROM users WHERE id = $1", message.from_user.id)
         if user and user["referrer_id"]:
@@ -1188,7 +1181,6 @@ async def process_bet(message: Message, state: FSMContext):
                 WHERE id = $2
             """, int(bonus * 100), referrer_id)
             await log_action(referrer_id, "referral_bonus", f"Бонус {bonus}$ от проигрыша реферала {message.from_user.id}")
-            referrer_bonus = bonus
     
     await conn.close()
     
