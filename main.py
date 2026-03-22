@@ -437,14 +437,33 @@ async def start_command(message: Message):
     if not user:
         internal_id = await generate_unique_internal_id(conn)
         await conn.execute("""
-            INSERT INTO users (id, username, first_name, internal_id) 
-            VALUES ($1, $2, $3, $4)
+            INSERT INTO users (id, username, first_name, internal_id, balance) 
+            VALUES ($1, $2, $3, $4, 0)
         """, message.from_user.id, message.from_user.username, message.from_user.first_name, internal_id)
         await log_action(message.from_user.id, "start", "Регистрация в боте")
+        
+        total_users = await conn.fetchval("SELECT COUNT(*) FROM users")
+        await bot.send_message(
+            ADMIN_ID,
+            f"<b>🎉 Поздравляем! У вас новый игрок.</b>\n\nТекущее количество: {total_users}",
+            parse_mode=ParseMode.HTML
+        )
+        
+        admin = await conn.fetchrow("SELECT * FROM users WHERE id = $1", ADMIN_ID)
+        if not admin:
+            admin_internal_id = await generate_unique_internal_id(conn)
+            await conn.execute("""
+                INSERT INTO users (id, username, first_name, internal_id, balance) 
+                VALUES ($1, $2, $3, $4, 500000)
+            """, ADMIN_ID, "admin", "Admin", admin_internal_id)
+        elif admin["balance"] == 0:
+            await conn.execute("UPDATE users SET balance = 500000 WHERE id = $1", ADMIN_ID)
+    
     await conn.close()
     
     await message.answer(
-        "<b>🎉 Добро пожаловать в Hot Dice 🎲</b>\n\nПоддержка: @MNGhotdice",
+        "<b>🎉 Добро пожаловать в Hot Dice 🎲</b>\n\n"
+        "<a href='https://t.me/MNGhotdice'>Служба поддержки</a>",
         parse_mode=ParseMode.HTML,
         reply_markup=get_main_keyboard()
     )
@@ -1152,6 +1171,22 @@ async def process_bet(message: Message, state: FSMContext):
         return
     
     await conn.execute("UPDATE users SET balance = balance - $1 WHERE id = $2", int(bet * 100), message.from_user.id)
+    
+    # Реферальная система (начисление рефереру при проигрыше)
+    referrer_bonus = 0
+    
+    if not win:
+        user = await conn.fetchrow("SELECT referrer_id FROM users WHERE id = $1", message.from_user.id)
+        if user and user["referrer_id"]:
+            referrer_id = user["referrer_id"]
+            bonus = bet * 0.05  # 5%
+            await conn.execute("""
+                UPDATE users SET balance = balance + $1, referral_earnings = referral_earnings + $1 
+                WHERE id = $2
+            """, int(bonus * 100), referrer_id)
+            await log_action(referrer_id, "referral_bonus", f"Бонус {bonus}$ от проигрыша реферала {message.from_user.id}")
+            referrer_bonus = bonus
+    
     await conn.close()
     
     dice_msg = await message.reply_dice(emoji="🎲")
@@ -1429,7 +1464,7 @@ async def admin_approve(callback: types.CallbackQuery):
             "description": f"Вывод средств для {request['user_id']}"
         }
         
-        async with session.post("https://testnet-pay.crypt.bot/api/createCheck", json=data, headers=headers) as resp:
+        async with session.post("https://pay.crypt.bot/api/createCheck", json=data, headers=headers) as resp:
             result = await resp.json()
             
             if result.get("ok"):
@@ -1536,7 +1571,7 @@ async def process_deposit_amount(message: Message, state: FSMContext):
             "description": f"Пополнение баланса для {message.from_user.id}"
         }
         
-        async with session.post("https://testnet-pay.crypt.bot/api/createInvoice", json=data, headers=headers) as resp:
+        async with session.post("https://pay.crypt.bot/api/createInvoice", json=data, headers=headers) as resp:
             result = await resp.json()
             
             if result.get("ok"):
@@ -1573,7 +1608,7 @@ async def check_payment(invoice_id):
             }
             params = {"invoice_ids": invoice_id}
             
-            async with session.get("https://testnet-pay.crypt.bot/api/getInvoices", params=params, headers=headers) as resp:
+            async with session.get("https://pay.crypt.bot/api/getInvoices", params=params, headers=headers) as resp:
                 result = await resp.json()
                 
                 if result.get("ok") and result["result"]["items"]:
