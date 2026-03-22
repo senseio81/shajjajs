@@ -348,10 +348,8 @@ def generate_crash():
 async def get_user_stats(user_id: int):
     conn = await asyncpg.connect(DATABASE_URL)
     
-    # Всего игр
     total_games = await conn.fetchval("SELECT COUNT(*) FROM logs WHERE user_id = $1 AND action IN ('dice_win', 'dice_lose', 'bowling_win', 'bowling_lose', 'darts_win', 'darts_lose', 'plane_win', 'plane_lose')", user_id) or 0
     
-    # Избранная игра
     favorite = await conn.fetchrow("""
         SELECT 
             CASE 
@@ -369,14 +367,12 @@ async def get_user_stats(user_id: int):
     """, user_id)
     favorite_game = favorite["game"] if favorite else "—"
     
-    # Максимальный выигрыш
     max_win = await conn.fetchval("""
         SELECT MAX(CAST(split_part(details, 'Выигрыш ', 2) AS FLOAT))
         FROM logs 
         WHERE user_id = $1 AND action IN ('dice_win', 'bowling_win', 'darts_win', 'plane_win')
     """, user_id) or 0
     
-    # Оборот
     total_bet = await conn.fetchval("SELECT total_bet FROM users WHERE id = $1", user_id) or 0
     
     await conn.close()
@@ -409,7 +405,6 @@ async def show_user_profile(message: Message, target_user_id: int):
 async def start_command(message: Message):
     args = message.text.split()
     
-    # Проверяем, есть ли параметр user_123
     if len(args) > 1 and args[1].startswith("user_"):
         try:
             target_user_id = int(args[1].split("_")[1])
@@ -418,7 +413,6 @@ async def start_command(message: Message):
         except:
             pass
     
-    # Обычная регистрация нового пользователя
     conn = await asyncpg.connect(DATABASE_URL)
     
     user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", message.from_user.id)
