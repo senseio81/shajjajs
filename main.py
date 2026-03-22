@@ -750,11 +750,11 @@ async def darts_mode_selected(callback: types.CallbackQuery, state: FSMContext):
     if mode == "red":
         coeff = 2.2
         mode_text = "Красный сектор"
-        win_condition = [1, 2]
+        win_condition = [1, 3]
     elif mode == "white":
         coeff = 2.2
         mode_text = "Белый сектор"
-        win_condition = [3, 4]
+        win_condition = [2, 4]
     elif mode == "center":
         coeff = 5.5
         mode_text = "Центр"
