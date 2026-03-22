@@ -3,11 +3,11 @@ import logging
 import os
 import aiohttp
 import random
+import re
 from datetime import datetime, timedelta
 from io import StringIO
 from collections import defaultdict
 import time
-import re
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
@@ -101,12 +101,10 @@ class GameStates(StatesGroup):
 async def init_db():
     conn = await asyncpg.connect(DATABASE_URL)
     
-    await conn.execute("DROP TABLE IF EXISTS users CASCADE")
-    
     await conn.execute("""
-        CREATE TABLE users (
+        CREATE TABLE IF NOT EXISTS users (
             id BIGINT PRIMARY KEY,
-            internal_id SERIAL UNIQUE,
+            internal_id INTEGER UNIQUE,
             username TEXT,
             first_name TEXT,
             balance INTEGER DEFAULT 0,
@@ -352,6 +350,13 @@ def generate_crash():
     else:
         return round(random.uniform(50.01, 100.00), 2)
 
+async def generate_unique_internal_id(conn):
+    while True:
+        internal_id = random.randint(10000, 99999)
+        existing = await conn.fetchval("SELECT 1 FROM users WHERE internal_id = $1", internal_id)
+        if not existing:
+            return internal_id
+
 async def get_user_stats(user_id: int):
     conn = await asyncpg.connect(DATABASE_URL)
     
@@ -430,9 +435,11 @@ async def start_command(message: Message):
     conn = await asyncpg.connect(DATABASE_URL)
     user = await conn.fetchrow("SELECT * FROM users WHERE id = $1", message.from_user.id)
     if not user:
+        internal_id = await generate_unique_internal_id(conn)
         await conn.execute("""
-            INSERT INTO users (id, username, first_name) VALUES ($1, $2, $3)
-        """, message.from_user.id, message.from_user.username, message.from_user.first_name)
+            INSERT INTO users (id, username, first_name, internal_id) 
+            VALUES ($1, $2, $3, $4)
+        """, message.from_user.id, message.from_user.username, message.from_user.first_name, internal_id)
         await log_action(message.from_user.id, "start", "Регистрация в боте")
     await conn.close()
     
@@ -1843,17 +1850,23 @@ async def top_day(message: Message):
     today = datetime.now().date()
     
     query = """
-        SELECT u.id, u.internal_id, u.first_name, SUM(w.amount) as total
-        FROM withdraw_requests w
-        JOIN users u ON w.user_id = u.id
-        WHERE w.status = 'approved' AND w.processed_at::date = $1
+        SELECT u.id, u.internal_id, u.first_name, SUM(CAST(split_part(l.details, 'ставка ', 2) AS FLOAT)) as total
+        FROM logs l
+        JOIN users u ON l.user_id = u.id
+        WHERE l.action IN ('dice_win', 'dice_lose', 'bowling_win', 'bowling_lose', 'darts_win', 'darts_lose', 'plane_win', 'plane_lose')
+        AND l.created_at::date = $1
         GROUP BY u.id, u.internal_id, u.first_name
         ORDER BY total DESC 
         LIMIT 10
     """
     
     top_users = await conn.fetch(query, today)
-    total_turnover = await conn.fetchval("SELECT SUM(amount) FROM withdraw_requests WHERE status = 'approved' AND processed_at::date = $1", today) or 0
+    total_turnover = await conn.fetchval("""
+        SELECT SUM(CAST(split_part(details, 'ставка ', 2) AS FLOAT) * 100) 
+        FROM logs 
+        WHERE action IN ('dice_win', 'dice_lose', 'bowling_win', 'bowling_lose', 'darts_win', 'darts_lose', 'plane_win', 'plane_lose')
+        AND created_at::date = $1
+    """, today) or 0
     await conn.close()
     
     medals = ["🥇", "🥈", "🥉", "🏅", "🏅", "🏅", "🏅", "🏅", "🏅", "🏅"]
@@ -1862,7 +1875,7 @@ async def top_day(message: Message):
     
     for i, user in enumerate(top_users):
         internal_id = user["internal_id"]
-        total = user["total"] / 100
+        total = user["total"] / 100 if user["total"] else 0
         display_name = user["first_name"] if user["first_name"] else "Secret User"
         medal = medals[i] if i < len(medals) else "🏅"
         
@@ -1879,17 +1892,23 @@ async def top_week(message: Message):
     week_ago = datetime.now() - timedelta(days=7)
     
     query = """
-        SELECT u.id, u.internal_id, u.first_name, SUM(w.amount) as total
-        FROM withdraw_requests w
-        JOIN users u ON w.user_id = u.id
-        WHERE w.status = 'approved' AND w.processed_at >= $1
+        SELECT u.id, u.internal_id, u.first_name, SUM(CAST(split_part(l.details, 'ставка ', 2) AS FLOAT)) as total
+        FROM logs l
+        JOIN users u ON l.user_id = u.id
+        WHERE l.action IN ('dice_win', 'dice_lose', 'bowling_win', 'bowling_lose', 'darts_win', 'darts_lose', 'plane_win', 'plane_lose')
+        AND l.created_at >= $1
         GROUP BY u.id, u.internal_id, u.first_name
         ORDER BY total DESC 
         LIMIT 10
     """
     
     top_users = await conn.fetch(query, week_ago)
-    total_turnover = await conn.fetchval("SELECT SUM(amount) FROM withdraw_requests WHERE status = 'approved' AND processed_at >= $1", week_ago) or 0
+    total_turnover = await conn.fetchval("""
+        SELECT SUM(CAST(split_part(details, 'ставка ', 2) AS FLOAT) * 100) 
+        FROM logs 
+        WHERE action IN ('dice_win', 'dice_lose', 'bowling_win', 'bowling_lose', 'darts_win', 'darts_lose', 'plane_win', 'plane_lose')
+        AND created_at >= $1
+    """, week_ago) or 0
     await conn.close()
     
     medals = ["🥇", "🥈", "🥉", "🏅", "🏅", "🏅", "🏅", "🏅", "🏅", "🏅"]
@@ -1898,7 +1917,7 @@ async def top_week(message: Message):
     
     for i, user in enumerate(top_users):
         internal_id = user["internal_id"]
-        total = user["total"] / 100
+        total = user["total"] / 100 if user["total"] else 0
         display_name = user["first_name"] if user["first_name"] else "Secret User"
         medal = medals[i] if i < len(medals) else "🏅"
         
@@ -1915,17 +1934,23 @@ async def top_month(message: Message):
     month_ago = datetime.now() - timedelta(days=30)
     
     query = """
-        SELECT u.id, u.internal_id, u.first_name, SUM(w.amount) as total
-        FROM withdraw_requests w
-        JOIN users u ON w.user_id = u.id
-        WHERE w.status = 'approved' AND w.processed_at >= $1
+        SELECT u.id, u.internal_id, u.first_name, SUM(CAST(split_part(l.details, 'ставка ', 2) AS FLOAT)) as total
+        FROM logs l
+        JOIN users u ON l.user_id = u.id
+        WHERE l.action IN ('dice_win', 'dice_lose', 'bowling_win', 'bowling_lose', 'darts_win', 'darts_lose', 'plane_win', 'plane_lose')
+        AND l.created_at >= $1
         GROUP BY u.id, u.internal_id, u.first_name
         ORDER BY total DESC 
         LIMIT 10
     """
     
     top_users = await conn.fetch(query, month_ago)
-    total_turnover = await conn.fetchval("SELECT SUM(amount) FROM withdraw_requests WHERE status = 'approved' AND processed_at >= $1", month_ago) or 0
+    total_turnover = await conn.fetchval("""
+        SELECT SUM(CAST(split_part(details, 'ставка ', 2) AS FLOAT) * 100) 
+        FROM logs 
+        WHERE action IN ('dice_win', 'dice_lose', 'bowling_win', 'bowling_lose', 'darts_win', 'darts_lose', 'plane_win', 'plane_lose')
+        AND created_at >= $1
+    """, month_ago) or 0
     await conn.close()
     
     medals = ["🥇", "🥈", "🥉", "🏅", "🏅", "🏅", "🏅", "🏅", "🏅", "🏅"]
@@ -1934,7 +1959,7 @@ async def top_month(message: Message):
     
     for i, user in enumerate(top_users):
         internal_id = user["internal_id"]
-        total = user["total"] / 100
+        total = user["total"] / 100 if user["total"] else 0
         display_name = user["first_name"] if user["first_name"] else "Secret User"
         medal = medals[i] if i < len(medals) else "🏅"
         
