@@ -1004,7 +1004,7 @@ async def process_bowling_bet(message: Message, state: FSMContext):
         win = knocked < 4
         win_text = f"Сбито кеглей: {knocked}"
     elif bowling_mode == "strike":
-        win = knocked == 10
+        win = knocked == 6
         win_text = f"Сбито кеглей: {knocked}"
     else:
         win = False
