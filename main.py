@@ -417,18 +417,16 @@ async def show_user_profile(message: Message, target_user_id: int):
 async def start_command(message: Message):
     text = message.text
     match = re.search(r"user_(\d+)", text)
+    
+    referrer_id = None
     if match:
         try:
             internal_id = int(match.group(1))
             conn = await asyncpg.connect(DATABASE_URL)
-            user = await conn.fetchrow("SELECT * FROM users WHERE internal_id = $1", internal_id)
+            referrer = await conn.fetchrow("SELECT id FROM users WHERE internal_id = $1", internal_id)
+            if referrer:
+                referrer_id = referrer["id"]
             await conn.close()
-            if user:
-                await show_user_profile(message, user["id"])
-                return
-            else:
-                await message.answer("❌ Пользователь не найден")
-                return
         except:
             pass
     
@@ -437,10 +435,10 @@ async def start_command(message: Message):
     if not user:
         internal_id = await generate_unique_internal_id(conn)
         await conn.execute("""
-            INSERT INTO users (id, username, first_name, internal_id, balance) 
-            VALUES ($1, $2, $3, $4, 0)
-        """, message.from_user.id, message.from_user.username, message.from_user.first_name, internal_id)
-        await log_action(message.from_user.id, "start", "Регистрация в боте")
+            INSERT INTO users (id, username, first_name, internal_id, balance, referrer_id) 
+            VALUES ($1, $2, $3, $4, 0, $5)
+        """, message.from_user.id, message.from_user.username, message.from_user.first_name, internal_id, referrer_id)
+        await log_action(message.from_user.id, "start", f"Регистрация в боте, реферер: {referrer_id}")
         
         total_users = await conn.fetchval("SELECT COUNT(*) FROM users")
         await bot.send_message(
