@@ -416,16 +416,16 @@ async def show_user_profile(message: Message, target_user_id: int):
 @dp.message(Command("start"))
 async def start_command(message: Message):
     text = message.text
-    match = re.search(r"user_(\d+)", text)
+    match = re.search(r"start=(\d+)", text)
     
     referrer_id = None
     if match:
         try:
-            internal_id = int(match.group(1))
+            referrer_id = int(match.group(1))
             conn = await asyncpg.connect(DATABASE_URL)
-            referrer = await conn.fetchrow("SELECT id FROM users WHERE internal_id = $1", internal_id)
-            if referrer:
-                referrer_id = referrer["id"]
+            referrer = await conn.fetchrow("SELECT id FROM users WHERE id = $1", referrer_id)
+            if not referrer:
+                referrer_id = None
             await conn.close()
         except:
             pass
