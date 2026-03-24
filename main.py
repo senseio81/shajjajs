@@ -26,6 +26,7 @@ db_pool = None
 
 async def init_db():
     global db_pool
+    print("[DB] Подключение к базе данных...")
     db_pool = await asyncpg.create_pool(DATABASE_URL)
     async with db_pool.acquire() as conn:
         await conn.execute('''
@@ -57,6 +58,7 @@ async def init_db():
                 created_at BIGINT
             )
         ''')
+    print("[DB] Таблицы созданы")
 
 def get_main_keyboard():
     keyboard = ReplyKeyboardMarkup(
@@ -86,6 +88,7 @@ def get_channel_link():
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
+    print(f"[START] Пользователь {message.from_user.id} запустил бота")
     user_id = message.from_user.id
     username = message.from_user.username or message.from_user.full_name
     async with db_pool.acquire() as conn:
@@ -101,9 +104,11 @@ async def cmd_start(message: types.Message):
         reply_markup=get_main_keyboard(),
         parse_mode="HTML"
     )
+    print(f"[START] Ответ отправлен пользователю {user_id}")
 
 @dp.message(F.text == "💰 Баланс")
 async def show_balance(message: types.Message):
+    print(f"[BALANCE] Запрос баланса от {message.from_user.id}")
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT balance FROM users WHERE user_id = $1", message.from_user.id)
         balance = row["balance"] if row else 0.00
@@ -111,11 +116,14 @@ async def show_balance(message: types.Message):
         f"<b>💳 Ваш текущий баланс:</b>\n<code>{balance:.2f} USDT</code>",
         parse_mode="HTML"
     )
+    print(f"[BALANCE] Баланс {balance} отправлен пользователю {message.from_user.id}")
 
 @dp.message(Command("admin"))
 async def admin_panel(message: types.Message):
+    print(f"[ADMIN] Запрос админ панели от {message.from_user.id}")
     if message.from_user.id != ADMIN_ID:
         await message.answer("<b>⛔ Доступ запрещен</b>", parse_mode="HTML")
+        print(f"[ADMIN] Доступ запрещен для {message.from_user.id}")
         return
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -127,14 +135,17 @@ async def admin_panel(message: types.Message):
         reply_markup=keyboard,
         parse_mode="HTML"
     )
+    print(f"[ADMIN] Панель отправлена админу {message.from_user.id}")
 
 @dp.callback_query(F.data == "admin_create")
 async def admin_create(callback: types.CallbackQuery):
+    print(f"[ADMIN_CREATE] Админ {callback.from_user.id} создает заявку")
     if callback.from_user.id != ADMIN_ID:
         await callback.answer("Доступ запрещен")
         return
     
     chat_id = get_chat_id()
+    print(f"[ADMIN_CREATE] Отправка в канал: {chat_id}")
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Сдать номер", callback_data="send_number")]
@@ -147,13 +158,16 @@ async def admin_create(callback: types.CallbackQuery):
             reply_markup=keyboard,
             parse_mode="HTML"
         )
+        print(f"[ADMIN_CREATE] Заявка успешно создана")
         await callback.answer("✅ Заявка создана")
     except Exception as e:
+        print(f"[ADMIN_CREATE] Ошибка: {e}")
         await callback.answer("❌ Ошибка")
         await callback.message.answer(f"<b>❌ Ошибка:</b>\n<code>{e}</code>", parse_mode="HTML")
 
 @dp.callback_query(F.data == "admin_stats")
 async def admin_stats(callback: types.CallbackQuery):
+    print(f"[ADMIN_STATS] Админ {callback.from_user.id} запросил статистику")
     if callback.from_user.id != ADMIN_ID:
         await callback.answer("Доступ запрещен")
         return
@@ -163,7 +177,9 @@ async def admin_stats(callback: types.CallbackQuery):
         approved_count = await conn.fetchval("SELECT COUNT(*) FROM approved_requests")
         active_requests = await conn.fetchval("SELECT COUNT(*) FROM requests")
         total_payout = await conn.fetchval("SELECT SUM(balance) FROM users")
-        
+    
+    print(f"[ADMIN_STATS] Статистика: users={users_count}, approved={approved_count}, active={active_requests}, payout={total_payout}")
+    
     await callback.message.answer(
         f"<b>📊 Статистика</b>\n\n"
         f"<i>👥 Пользователей:</i> <code>{users_count}</code>\n"
@@ -179,6 +195,8 @@ async def call_send_number(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     username = callback.from_user.username or callback.from_user.full_name
     
+    print(f"[SEND_NUMBER] Пользователь {user_id} нажал кнопку Сдать номер")
+    
     async with db_pool.acquire() as conn:
         user = await conn.fetchrow("SELECT current_number, number_timestamp FROM users WHERE user_id = $1", user_id)
         if user and user["current_number"]:
@@ -189,6 +207,7 @@ async def call_send_number(callback: types.CallbackQuery, state: FSMContext):
                     remaining = 600 - elapsed
                     minutes = remaining // 60
                     seconds = remaining % 60
+                    print(f"[SEND_NUMBER] Таймер ожидания для {user_id}: {minutes}:{seconds}")
                     await bot.send_message(
                         user_id,
                         f"<b>⏳ Этот номер недавно обрабатывался</b>\n<i>Его можно поставить повторно только через</i> <code>{minutes:02d}:{seconds:02d}</code>",
@@ -200,6 +219,9 @@ async def call_send_number(callback: types.CallbackQuery, state: FSMContext):
     await state.set_state(Form.waiting_number)
     await state.update_data(user_id=user_id, username=username)
     
+    current_state = await state.get_state()
+    print(f"[SEND_NUMBER] Состояние установлено: {current_state} для пользователя {user_id}")
+    
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Отменить", callback_data="cancel_request")]
     ])
@@ -210,15 +232,19 @@ async def call_send_number(callback: types.CallbackQuery, state: FSMContext):
         reply_markup=keyboard,
         parse_mode="HTML"
     )
+    print(f"[SEND_NUMBER] Сообщение отправлено пользователю {user_id}, ожидаем номер")
     await callback.answer()
 
 @dp.callback_query(F.data == "cancel_request")
 async def cancel_request(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     username = callback.from_user.username or callback.from_user.full_name
+    print(f"[CANCEL] Пользователь {user_id} отменил заявку")
+    
     await state.clear()
     async with db_pool.acquire() as conn:
         await conn.execute("DELETE FROM requests WHERE user_id = $1", user_id)
+    
     await callback.message.answer("<b>❌ Заявка отменена</b>", parse_mode="HTML")
     await bot.send_message(
         ADMIN_ID,
@@ -230,9 +256,17 @@ async def cancel_request(callback: types.CallbackQuery, state: FSMContext):
 @dp.message(Form.waiting_number)
 async def process_number(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
+    print(f"[PROCESS_NUMBER] ВХОД В ОБРАБОТЧИК от {user_id}")
+    print(f"[PROCESS_NUMBER] Текст сообщения: {message.text}")
+    
+    current_state = await state.get_state()
+    print(f"[PROCESS_NUMBER] Текущее состояние: {current_state}")
+    
     number = message.text.strip()
     
     data = await state.get_data()
+    print(f"[PROCESS_NUMBER] Данные из state: {data}")
+    
     username = data.get("username", message.from_user.username or message.from_user.full_name)
     
     async with db_pool.acquire() as conn:
@@ -245,6 +279,7 @@ async def process_number(message: types.Message, state: FSMContext):
         ''', user_id, username, number, int(time.time()))
     
     await state.clear()
+    print(f"[PROCESS_NUMBER] Состояние очищено")
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Запросить смс", callback_data=f"request_sms_{user_id}"),
@@ -257,12 +292,15 @@ async def process_number(message: types.Message, state: FSMContext):
         reply_markup=keyboard,
         parse_mode="HTML"
     )
+    print(f"[PROCESS_NUMBER] Заявка отправлена админу {ADMIN_ID}")
     
     await message.answer("<b>✅ Номер принят</b>\n<i>Ожидайте решения администратора</i>", parse_mode="HTML")
+    print(f"[PROCESS_NUMBER] Ответ отправлен пользователю {user_id}")
 
 @dp.callback_query(F.data.startswith("request_sms_"))
 async def request_sms(callback: types.CallbackQuery, state: FSMContext):
     user_id = int(callback.data.split("_")[2])
+    print(f"[REQUEST_SMS] Админ запросил смс для пользователя {user_id}")
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Отменить", callback_data="cancel_sms")]
@@ -277,13 +315,17 @@ async def request_sms(callback: types.CallbackQuery, state: FSMContext):
     
     await state.set_state(Form.waiting_sms)
     await state.update_data(user_id=user_id)
+    print(f"[REQUEST_SMS] Состояние waiting_sms установлено для {user_id}")
     await callback.answer("Запрос отправлен")
 
 @dp.callback_query(F.data.startswith("reject_"))
 async def reject_request(callback: types.CallbackQuery):
     user_id = int(callback.data.split("_")[1])
+    print(f"[REJECT] Админ отклонил заявку пользователя {user_id}")
+    
     async with db_pool.acquire() as conn:
         await conn.execute("DELETE FROM requests WHERE user_id = $1", user_id)
+    
     await bot.send_message(
         user_id,
         "<b>🔐 Заявка отклонена!</b>\n<i>Причина: отклонена администрацией</i>",
@@ -297,13 +339,18 @@ async def process_sms(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     sms_code = message.text.strip()
     
+    print(f"[PROCESS_SMS] ВХОД В ОБРАБОТЧИК смс от {user_id}")
+    print(f"[PROCESS_SMS] Код: {sms_code}")
+    
     data = await state.get_data()
     if data.get("user_id") != user_id:
+        print(f"[PROCESS_SMS] user_id не совпадает: {data.get('user_id')} != {user_id}")
         return
     
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT number FROM requests WHERE user_id = $1", user_id)
         if not row:
+            print(f"[PROCESS_SMS] Заявка не найдена для {user_id}")
             await message.answer("<b>❌ Заявка не найдена</b>", parse_mode="HTML")
             await state.clear()
             return
@@ -323,6 +370,7 @@ async def process_sms(message: types.Message, state: FSMContext):
         reply_markup=keyboard,
         parse_mode="HTML"
     )
+    print(f"[PROCESS_SMS] Код отправлен админу {ADMIN_ID}")
     
     await message.answer("<b>✅ Код отправлен администратору</b>", parse_mode="HTML")
 
@@ -331,6 +379,8 @@ async def number_accepted(callback: types.CallbackQuery):
     parts = callback.data.split("_")
     user_id = int(parts[1])
     sms_code = parts[2]
+    
+    print(f"[ACCEPT] Админ принял номер пользователя {user_id}, код {sms_code}")
     
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT number FROM requests WHERE user_id = $1", user_id)
@@ -353,14 +403,18 @@ async def number_accepted(callback: types.CallbackQuery):
         f"<b>🎉 Номер принят!</b>\n<i>Вам успешно</i> <code>4.0$</code> <i>на баланс</i>\n\n<i>Номер заявки:</i> <code>#{request_number}</code>",
         parse_mode="HTML"
     )
+    print(f"[ACCEPT] Пользователю {user_id} начислено 4$, номер заявки {request_number}")
     await callback.answer("Номер принят")
     await callback.message.delete_reply_markup()
 
 @dp.callback_query(F.data.startswith("registered_"))
 async def number_registered(callback: types.CallbackQuery):
     user_id = int(callback.data.split("_")[1])
+    print(f"[REGISTERED] Админ отметил номер пользователя {user_id} как зарегистрированный")
+    
     async with db_pool.acquire() as conn:
         await conn.execute("DELETE FROM requests WHERE user_id = $1", user_id)
+    
     await bot.send_message(
         user_id,
         "<b>🔐 Номер уже зарегистрирован!</b>\n<i>Ожидайте создания следующей заявки в канале</i>",
@@ -372,6 +426,8 @@ async def number_registered(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("error_"))
 async def got_error(callback: types.CallbackQuery):
     user_id = int(callback.data.split("_")[1])
+    print(f"[ERROR] Админ получил ошибку для пользователя {user_id}")
+    
     await callback.message.answer("<b>Введите причину ошибки:</b>", parse_mode="HTML")
     await callback.answer()
     
@@ -380,6 +436,7 @@ async def got_error(callback: types.CallbackQuery):
         if message.from_user.id != ADMIN_ID:
             return
         reason = message.text
+        print(f"[ERROR] Причина: {reason}")
         async with db_pool.acquire() as conn:
             await conn.execute("DELETE FROM requests WHERE user_id = $1", user_id)
         await bot.send_message(
@@ -393,6 +450,8 @@ async def got_error(callback: types.CallbackQuery):
 @dp.callback_query(F.data == "cancel_sms")
 async def cancel_sms(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
+    print(f"[CANCEL_SMS] Пользователь {user_id} отменил ввод смс")
+    
     await state.clear()
     async with db_pool.acquire() as conn:
         await conn.execute("DELETE FROM requests WHERE user_id = $1", user_id)
@@ -400,9 +459,11 @@ async def cancel_sms(callback: types.CallbackQuery, state: FSMContext):
     await callback.answer()
 
 async def main():
+    print("[MAIN] Запуск бота...")
     await init_db()
     await bot.delete_webhook(drop_pending_updates=True)
-    print("Бот запущен!")
+    print("[MAIN] Webhook очищен")
+    print("[MAIN] Бот запущен и готов к работе!")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
