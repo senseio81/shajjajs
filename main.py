@@ -65,6 +65,15 @@ def get_main_keyboard():
     )
     return keyboard
 
+def get_channel_id_from_url():
+    url = CHANNEL_URL
+    if url.startswith("https://t.me/"):
+        username = url.replace("https://t.me/", "")
+        return username
+    elif url.startswith("@"):
+        return url[1:]
+    return url
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     user_id = message.from_user.id
@@ -95,17 +104,14 @@ async def cmd_menu(message: types.Message):
 async def cmd_create(message: types.Message):
     if message.from_user.id != ADMIN_ID:
         return
-    channel_id = CHANNEL_URL
-    if channel_id.startswith("https://t.me/"):
-        channel_id = channel_id.replace("https://t.me/", "")
-    elif channel_id.startswith("@"):
-        channel_id = channel_id[1:]
+    
+    channel_username = get_channel_id_from_url()
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Сдать номер", callback_data="send_number")]
     ])
     await bot.send_message(
-        channel_id,
+        f"@{channel_username}",
         "💼 **Требуется номер для работы!**\n*⏱️ Нажмите кнопку снизу для сдачи*",
         reply_markup=keyboard
     )
@@ -118,14 +124,15 @@ async def call_send_number(callback: types.CallbackQuery, state: FSMContext):
         user = await conn.fetchrow("SELECT current_number, number_timestamp FROM users WHERE user_id = $1", user_id)
         if user and user["current_number"]:
             last_time = user["number_timestamp"]
-            elapsed = int(time.time()) - last_time
-            if elapsed < 600:
-                remaining = 600 - elapsed
-                minutes = remaining // 60
-                seconds = remaining % 60
-                await callback.message.answer(f"⏳ Этот номер недавно обрабатывался.\nЕго можно поставить повторно только через {minutes:02d}:{seconds:02d}")
-                await callback.answer()
-                return
+            if last_time:
+                elapsed = int(time.time()) - last_time
+                if elapsed < 600:
+                    remaining = 600 - elapsed
+                    minutes = remaining // 60
+                    seconds = remaining % 60
+                    await callback.message.answer(f"⏳ Этот номер недавно обрабатывался.\nЕго можно поставить повторно только через {minutes:02d}:{seconds:02d}")
+                    await callback.answer()
+                    return
     await state.set_state(Form.waiting_number)
     await state.update_data(user_id=user_id, username=username)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -155,7 +162,7 @@ async def cancel_request(callback: types.CallbackQuery, state: FSMContext):
     if current_state:
         await state.clear()
     async with db_pool.acquire() as conn:
-        await conn.execute("DELETE FROM requests WHERE user_id = $1 AND status = 'waiting_number'", user_id)
+        await conn.execute("DELETE FROM requests WHERE user_id = $1", user_id)
     await callback.message.answer("❌ Заявка отменена")
     await bot.send_message(
         ADMIN_ID,
@@ -267,10 +274,11 @@ async def number_accepted(callback: types.CallbackQuery):
         await conn.execute("DELETE FROM requests WHERE user_id = $1", user_id)
         count = await conn.fetchval("SELECT COUNT(*) FROM approved_requests")
         request_number = 12 + count
+        username = callback.from_user.username or callback.from_user.full_name
         await conn.execute('''
             INSERT INTO approved_requests (user_id, username, number, request_number, created_at)
             VALUES ($1, $2, $3, $4, $5)
-        ''', user_id, callback.from_user.username or callback.from_user.full_name, number, request_number, int(time.time()))
+        ''', user_id, username, number, request_number, int(time.time()))
         await conn.execute("UPDATE users SET balance = balance + 4.00 WHERE user_id = $1", user_id)
     await bot.send_message(user_id, f"**🎉 Номер принят!**\nВам успешно 4.0$ на баланс.\n\nНомер заявки: #{request_number}")
     await callback.answer("Номер принят")
