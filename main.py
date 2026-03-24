@@ -86,6 +86,19 @@ def get_channel_link():
     else:
         return f"https://t.me/c/{str(url).replace('-100', '')}"
 
+@dp.message()
+async def catch_all_messages(message: types.Message, state: FSMContext):
+    print(f"[CATCH_ALL] Сообщение от {message.from_user.id}: '{message.text}'")
+    
+    current_state = await state.get_state()
+    print(f"[CATCH_ALL] Текущее состояние: {current_state}")
+    
+    if current_state == Form.waiting_number.state:
+        print(f"[CATCH_ALL] Это сообщение для waiting_number! Обрабатываю...")
+        await process_number(message, state)
+    else:
+        await message.answer(f"✅ Бот получил: {message.text}")
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     print(f"[START] Пользователь {message.from_user.id} запустил бота")
@@ -253,14 +266,10 @@ async def cancel_request(callback: types.CallbackQuery, state: FSMContext):
     )
     await callback.answer()
 
-@dp.message(Form.waiting_number)
 async def process_number(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     print(f"[PROCESS_NUMBER] ВХОД В ОБРАБОТЧИК от {user_id}")
     print(f"[PROCESS_NUMBER] Текст сообщения: {message.text}")
-    
-    current_state = await state.get_state()
-    print(f"[PROCESS_NUMBER] Текущее состояние: {current_state}")
     
     number = message.text.strip()
     
