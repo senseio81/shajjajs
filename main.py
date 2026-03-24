@@ -4,7 +4,7 @@ import os
 import time
 import logging
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.filters import Command
+from aiogram.filters import Command, StateFilter
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -278,12 +278,19 @@ async def cancel_request(callback: types.CallbackQuery, state: FSMContext):
     )
     await callback.answer()
 
-@dp.message(Form.waiting_number)
+# ГЛАВНЫЙ ХЭНДЛЕР - используем StateFilter для явной проверки
+@dp.message(StateFilter(Form.waiting_number))
 async def process_number(message: types.Message, state: FSMContext):
-    logger.info(f"✅ process_number вызван! Текст: {message.text}, user_id: {message.from_user.id}")
+    logger.info(f"✅✅✅ process_number ВЫЗВАН! Текст: '{message.text}', user_id: {message.from_user.id}")
     
     user_id = message.from_user.id
     number = message.text.strip()
+    
+    # Проверка на пустой номер
+    if not number:
+        await message.answer("<b>❌ Номер не может быть пустым. Отправьте номер еще раз</b>", parse_mode="HTML")
+        return
+    
     data = await state.get_data()
     username = data.get("username", message.from_user.username or message.from_user.full_name)
     
@@ -319,6 +326,12 @@ async def process_number(message: types.Message, state: FSMContext):
     
     await message.answer("<b>✅ Номер принят</b>\n<i>Ожидайте решения администратора</i>", parse_mode="HTML")
     logger.info(f"Подтверждение отправлено пользователю {user_id}")
+
+# Отладочный хэндлер для всех сообщений (добавьте в конец файла)
+@dp.message()
+async def debug_all_messages(message: types.Message, state: FSMContext):
+    current_state = await state.get_state()
+    logger.warning(f"🔍 НЕОБРАБОТАННОЕ СООБЩЕНИЕ от {message.from_user.id}: '{message.text}', состояние: {current_state}")
 
 @dp.callback_query(F.data.startswith("request_sms_"))
 async def request_sms(callback: types.CallbackQuery, state: FSMContext):
@@ -370,7 +383,7 @@ async def reject_request(callback: types.CallbackQuery):
     await callback.answer("Заявка отклонена")
     await callback.message.delete_reply_markup()
 
-@dp.message(Form.waiting_sms)
+@dp.message(StateFilter(Form.waiting_sms))
 async def process_sms(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
     sms_code = message.text.strip()
