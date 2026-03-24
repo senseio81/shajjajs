@@ -65,14 +65,24 @@ def get_main_keyboard():
     )
     return keyboard
 
-def get_channel_id_from_url():
+def get_chat_id():
     url = CHANNEL_URL
     if url.startswith("https://t.me/"):
         username = url.replace("https://t.me/", "")
-        return username
+        return f"@{username}"
     elif url.startswith("@"):
-        return url[1:]
-    return url
+        return url
+    else:
+        return int(url)
+
+def get_channel_link():
+    url = CHANNEL_URL
+    if url.startswith("https://t.me/"):
+        return url
+    elif url.startswith("@"):
+        return f"https://t.me/{url[1:]}"
+    else:
+        return f"https://t.me/c/{str(url).replace('-100', '')}"
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
@@ -84,8 +94,10 @@ async def cmd_start(message: types.Message):
             ON CONFLICT (user_id) DO UPDATE SET username = $2
         ''', user_id, username)
     
+    channel_link = get_channel_link()
+    
     await message.answer(
-        f"🔐 <b>JetMax - твое богатое будущее!</b>\nДля дальнейшей работы с ботом подпишитесь на канал: {CHANNEL_URL}",
+        f"🔐 <b>JetMax - твое богатое будущее!</b>\nДля дальнейшей работы с ботом подпишитесь на канал: {channel_link}",
         reply_markup=get_main_keyboard(),
         parse_mode="HTML"
     )
@@ -104,22 +116,67 @@ async def show_balance(message: types.Message):
 async def cmd_menu(message: types.Message):
     await message.answer("Меню:", reply_markup=get_main_keyboard())
 
-@dp.message(Command("create"))
-async def cmd_create(message: types.Message):
+@dp.message(Command("admin"))
+async def admin_panel(message: types.Message):
     if message.from_user.id != ADMIN_ID:
+        await message.answer("⛔ Доступ запрещен")
         return
     
-    channel_username = get_channel_id_from_url()
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📢 Создать заявку", callback_data="admin_create")],
+        [InlineKeyboardButton(text="📊 Статистика", callback_data="admin_stats")]
+    ])
+    await message.answer(
+        "<b>👨‍💼 Админ панель</b>\nВыберите действие:",
+        reply_markup=keyboard,
+        parse_mode="HTML"
+    )
+
+@dp.callback_query(F.data == "admin_create")
+async def admin_create(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("Доступ запрещен")
+        return
+    
+    chat_id = get_chat_id()
     
     keyboard = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="Сдать номер", callback_data="send_number")]
     ])
-    await bot.send_message(
-        f"@{channel_username}",
-        "<b>💼 Требуется номер для работы!</b>\n<i>⏱️ Нажмите кнопку снизу для сдачи</i>",
-        reply_markup=keyboard,
+    
+    try:
+        await bot.send_message(
+            chat_id,
+            "<b>💼 Требуется номер для работы!</b>\n<i>⏱️ Нажмите кнопку снизу для сдачи</i>",
+            reply_markup=keyboard,
+            parse_mode="HTML"
+        )
+        await callback.answer("✅ Заявка создана")
+    except Exception as e:
+        await callback.answer(f"❌ Ошибка: {e}")
+        await callback.message.answer(f"Ошибка отправки в канал: {e}")
+
+@dp.callback_query(F.data == "admin_stats")
+async def admin_stats(callback: types.CallbackQuery):
+    if callback.from_user.id != ADMIN_ID:
+        await callback.answer("Доступ запрещен")
+        return
+    
+    async with db_pool.acquire() as conn:
+        users_count = await conn.fetchval("SELECT COUNT(*) FROM users")
+        approved_count = await conn.fetchval("SELECT COUNT(*) FROM approved_requests")
+        active_requests = await conn.fetchval("SELECT COUNT(*) FROM requests")
+        total_payout = await conn.fetchval("SELECT SUM(balance) FROM users")
+        
+    await callback.message.answer(
+        f"<b>📊 Статистика</b>\n\n"
+        f"👥 Пользователей: <code>{users_count}</code>\n"
+        f"✅ Выполнено заявок: <code>{approved_count}</code>\n"
+        f"🔄 Активных заявок: <code>{active_requests}</code>\n"
+        f"💰 Выплачено: <code>{total_payout or 0:.2f} USDT</code>",
         parse_mode="HTML"
     )
+    await callback.answer()
 
 @dp.callback_query(F.data == "send_number")
 async def call_send_number(callback: types.CallbackQuery, state: FSMContext):
